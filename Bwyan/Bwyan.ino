@@ -55,7 +55,7 @@ const char levels[] PROGMEM = {
   0b11111
 };
 
-enum State { INIT, START_WORK, FOLLOW_LINE, GET_BORED, BE_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP-THE-LOOP, BARREL_ROLL, RETURN_TO_WORK };
+enum State { INIT, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP-THE-LOOP, BARREL_ROLL, RETURN_TO_WORK };
 State state = INIT;
 
 const unsigned int MORNING_DURATION = 6000;
@@ -213,7 +213,6 @@ void loop()
     case START_WORK: startWork(); break;
     case FOLLOW_LINE: followLine(); break;
     case GET_BORED: getBored(); break;
-    case BE_BORED: break;   //do nothing - this is used to leave a message on the screen for a set duration
     case CHECK_FOR_THE_BOSS: checkForTheBoss(); break;
     case GO_OFF_ROAD: goOffRoad(); break;
     case ENTER_CABLE_CAR: break;
@@ -231,9 +230,9 @@ void loop()
 //Until lunchtime, we will follow the line.
 void startWork()
 {
+  state = FOLLOW_LINE;
   nextState = GET_BORED;
   transitionAfter(MORNING_DURATION);
-  state = FOLLOW_LINE;
 }
 
 void followLine() {
@@ -280,9 +279,9 @@ void getBored()
 {
   OrangutanLCD::print("This is boring");
 
+  state = FOLLOW_LINE;
   nextState = CHECK_FOR_THE_BOSS;
   transitionAfter(BORED_DURATION);
-  state = BE_BORED;
 }
 
 //'Looks' left and right
