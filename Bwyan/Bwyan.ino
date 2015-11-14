@@ -15,24 +15,51 @@
 #include <OrangutanPushbuttons.h>
 #include <OrangutanBuzzer.h>
 
-Pololu3pi robot;
-unsigned int sensors[5];
-
 // This include file allows data to be stored in program space.  The
 // ATmega168 has 16k of program space compared to 1k of RAM, so large
 // pieces of static data should be stored in program space.
 #include <avr/pgmspace.h>
 
+//When in Debug mode, the buzzer and LCD are used to help verify correct operation
+//When in Fast Start mode, welcome message and calibration steps are skipped (useful for quick testing)
+boolean inDebugMode = true;
+boolean inFastStartMode = false;
+
+Pololu3pi robot;
+
+const unsigned int NUM_SENSORS = 5;
+unsigned int sensors[NUM_SENSORS];
+
+//To enable accurate verification of whether the sensors are over white or black,
+//we check several sensor readings over a short period.
+const unsigned int READING_HISTORY_LENGTH = 5;
+const unsigned int READING_HISTORY_MAX = READING_HISTORY_LENGTH - 1;
+unsigned int readingHistory[READING_HISTORY_LENGTH];
+
+//If the total of all sensor readings in the recent history is less than this amount,
+//we must be over a white section of line (aka. a "signal")
+const unsigned int WHITE_THRESHOLD = READING_HISTORY_LENGTH * 20;
+boolean onWhite = false;
+
+//Maximum time between two "signals" that will count them as part of the same "message"
+const unsigned int MESSAGE_WINDOW_TIMEOUT = 500; //milliseconds
+unsigned int messageWindowExpiryTime;
+boolean messageIsBeingReceived = false;
+unsigned int message = 0; //the message currently being received
+unsigned int lastMessage = 3; //the last complete message received
+
 // Introductory messages.  The "PROGMEM" identifier causes the data to
 // go into program space.
-const char welcome_line1[] PROGMEM = "Hello, my name";
-const char welcome_line2[] PROGMEM = "is Bwyan";
+const char welcome_line1[] PROGMEM = "  I'm";
+const char welcome_line2[] PROGMEM = " Bwyan";
 const char demo_name_line1[] PROGMEM = "I follow";
-const char demo_name_line2[] PROGMEM = "lines";
+const char demo_name_line2[] PROGMEM = " lines";
 
 // A couple of simple tunes, stored in program space.
 const char welcome[] PROGMEM = ">g32>>c32";
 const char go[] PROGMEM = "L16 cdegreg4";
+const char signalTune[] PROGMEM = "L16 c";
+const char messageTune[] PROGMEM = "L16 ad";
 
 // Data for generating the characters used in load_custom_characters
 // and display_readings.  By reading levels[] starting at various
@@ -55,14 +82,16 @@ const char levels[] PROGMEM = {
   0b11111
 };
 
-enum State { INIT, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP-THE-LOOP, BARREL_ROLL, RETURN_TO_WORK };
+enum State  { INIT, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP_THE_LOOP, BARREL_ROLL, RETURN_TO_WORK };
 State state = INIT;
+State previousState = INIT;
+State nextState;
 
+const unsigned int NEVER = 0;
 const unsigned int MORNING_DURATION = 6000;
 const unsigned int BORED_DURATION = 3000;
 const unsigned int CHECK_FOR_BOSS_PAUSE = 1000;
-unsigned int nextTransitionTime;
-State nextState;
+unsigned int nextTransitionTime = NEVER;
 
 // This function loads custom characters into the LCD.  Up to 8
 // characters can be loaded; we use them for 7 levels of a bar graph.
@@ -114,18 +143,22 @@ void setup()
 
   load_custom_characters(); // load the custom characters
 
-  // Play welcome music and display a message
-  OrangutanLCD::printFromProgramSpace(welcome_line1);
-  OrangutanLCD::gotoXY(0, 1);
-  OrangutanLCD::printFromProgramSpace(welcome_line2);
   OrangutanBuzzer::playFromProgramSpace(welcome);
-  delay(1000);
 
-  OrangutanLCD::clear();
-  OrangutanLCD::printFromProgramSpace(demo_name_line1);
-  OrangutanLCD::gotoXY(0, 1);
-  OrangutanLCD::printFromProgramSpace(demo_name_line2);
-  delay(1000);
+  if (!inFastStartMode)
+  {
+    // Play welcome music and display a message
+    OrangutanLCD::printFromProgramSpace(welcome_line1);
+    OrangutanLCD::gotoXY(0, 1);
+    OrangutanLCD::printFromProgramSpace(welcome_line2);
+    delay(1000);
+
+    OrangutanLCD::clear();
+    OrangutanLCD::printFromProgramSpace(demo_name_line1);
+    OrangutanLCD::gotoXY(0, 1);
+    OrangutanLCD::printFromProgramSpace(demo_name_line2);
+    delay(1000);
+  }
 
   // Display battery voltage and wait for button press
   while (!OrangutanPushbuttons::isPressed(BUTTON_B))
@@ -144,52 +177,55 @@ void setup()
   // Always wait for the button to be released so that 3pi doesn't
   // start moving until your hand is away from it.
   OrangutanPushbuttons::waitForRelease(BUTTON_B);
-  delay(1000);
 
-  // Auto-calibration: turn right and left while calibrating the
-  // sensors.
-  for (counter=0; counter<80; counter++)
+  if (!inFastStartMode)
   {
-    if (counter < 20 || counter >= 60)
-      OrangutanMotors::setSpeeds(40, -40);
-    else
-      OrangutanMotors::setSpeeds(-40, 40);
-
-    // This function records a set of sensor readings and keeps
-    // track of the minimum and maximum values encountered.  The
-    // IR_EMITTERS_ON argument means that the IR LEDs will be
-    // turned on during the reading, which is usually what you
-    // want.
-    robot.calibrateLineSensors(IR_EMITTERS_ON);
-
-    // Since our counter runs to 80, the total delay will be
-    // 80*20 = 1600 ms.
-    delay(20);
+    delay(1000);
+    
+    // Auto-calibration: turn right and left while calibrating the
+    // sensors.
+    for (counter=0; counter<80; counter++)
+    {
+      if (counter < 20 || counter >= 60)
+        OrangutanMotors::setSpeeds(40, -40);
+      else
+        OrangutanMotors::setSpeeds(-40, 40);
+  
+      // This function records a set of sensor readings and keeps
+      // track of the minimum and maximum values encountered.  The
+      // IR_EMITTERS_ON argument means that the IR LEDs will be
+      // turned on during the reading, which is usually what you
+      // want.
+      robot.calibrateLineSensors(IR_EMITTERS_ON);
+  
+      // Since our counter runs to 80, the total delay will be
+      // 80*20 = 1600 ms.
+      delay(20);
+    }
+    OrangutanMotors::setSpeeds(0, 0);
+  
+    // Display calibrated values as a bar graph.
+    while (!OrangutanPushbuttons::isPressed(BUTTON_B))
+    {
+      // Read the sensor values and get the position measurement.
+      unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+  
+      // Display the position measurement, which will go from 0
+      // (when the leftmost sensor is over the line) to 4000 (when
+      // the rightmost sensor is over the line) on the 3pi, along
+      // with a bar graph of the sensor readings.  This allows you
+      // to make sure the robot is ready to go.
+      OrangutanLCD::clear();
+      OrangutanLCD::print(position);
+      OrangutanLCD::gotoXY(0, 1);
+      display_readings(sensors);
+  
+      delay(100);
+    }
+    OrangutanPushbuttons::waitForRelease(BUTTON_B);
   }
-  OrangutanMotors::setSpeeds(0, 0);
-
-  // Display calibrated values as a bar graph.
-  while (!OrangutanPushbuttons::isPressed(BUTTON_B))
-  {
-    // Read the sensor values and get the position measurement.
-    unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
-
-    // Display the position measurement, which will go from 0
-    // (when the leftmost sensor is over the line) to 4000 (when
-    // the rightmost sensor is over the line) on the 3pi, along
-    // with a bar graph of the sensor readings.  This allows you
-    // to make sure the robot is ready to go.
-    OrangutanLCD::clear();
-    OrangutanLCD::print(position);
-    OrangutanLCD::gotoXY(0, 1);
-    display_readings(sensors);
-
-    delay(100);
-  }
-  OrangutanPushbuttons::waitForRelease(BUTTON_B);
-
+  
   OrangutanLCD::clear();
-
   OrangutanLCD::print("Go!");    
 
   // Play music and wait for it to finish before we start driving.
@@ -203,11 +239,21 @@ void setup()
 // the Arduino framework.
 void loop()
 {
-  if (millis() > nextTransitionTime)
+  if (nextTransitionTime != NEVER && millis() > nextTransitionTime)
   {
     state = nextState;
+    nextTransitionTime = NEVER;
   }
-  
+
+  if (messageReceived())
+  {
+    if (inDebugMode)
+    {
+      messageBeep();
+      displayLastMessage();
+    }
+  }
+
   switch(state)
   {
     case START_WORK: startWork(); break;
@@ -217,9 +263,9 @@ void loop()
     case GO_OFF_ROAD: goOffRoad(); break;
     case ENTER_CABLE_CAR: break;
     case BALANCE_ON_BEAM: break;
-    case LOOP-THE-LOOP: break;
+    case LOOP_THE_LOOP: break;
     case BARREL_ROLL: break;
-    case RETURN_TO_WORK: break;
+    case RETURN_TO_WORK: returnToWork(); break;
     default: break;
   }
 }
@@ -230,19 +276,34 @@ void loop()
 //Until lunchtime, we will follow the line.
 void startWork()
 {
+  displayState("StartWrk");
+  
   state = FOLLOW_LINE;
-  nextState = GET_BORED;
-  transitionAfter(MORNING_DURATION);
+//  nextState = GET_BORED;
+//  transitionAfter(MORNING_DURATION);
 }
 
+//Tracks a black line on a light background and monitors for
+//signals (which trigger state changes)
 void followLine() {
   //TODO: Implement PID control (if Andrew Mason didn't already do this)
-  //TODO: Replace read_line function with our own version that is also able to detect signals
+  displayState("FollowLn");
   
   // Get the position of the line.  Note that we *must* provide
   // the "sensors" argument to read_line() here, even though we
   // are not interested in the individual sensor readings.
   unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+  unsigned int sensorSum = sum(sensors, NUM_SENSORS);
+  addToSensorReadingHistory(sensorSum);
+  checkForSignal();
+
+  OrangutanLCD::clear();
+  OrangutanLCD::print("SensorSum");
+  OrangutanLCD::gotoXY(0, 1);
+  OrangutanLCD::print(sensorSum);
+
+  
   if (position < 1000)
   {
     // We are far to the right of the line: turn left.
@@ -277,8 +338,7 @@ void followLine() {
 
 void getBored()
 {
-  OrangutanLCD::print("This is boring");
-
+  displayState("GetBored");
   state = FOLLOW_LINE;
   nextState = CHECK_FOR_THE_BOSS;
   transitionAfter(BORED_DURATION);
@@ -286,6 +346,8 @@ void getBored()
 
 //'Looks' left and right
 void checkForTheBoss() {
+  displayState("ChkBoss");
+
   unsigned int counter;
   
   for (counter=0; counter<80; counter++) {
@@ -307,13 +369,22 @@ void checkForTheBoss() {
 //Turns then drives at high speed in a straight line (unmarked) until it finds a new line
 void goOffRoad()
 {
-  for (counter=0;counter<15;counter++) {
-    OrangutanMotors::setSpeeds(-40, 40);
-  }
-  
-  OrangutanMotors::setSpeeds(0, 0);
+  displayState("GoOffRd");
+
+  OrangutanMotors::setSpeeds(40, -40);
 
   //TODO: implement high-speed escape, and everything thereafter
+
+  delay(1000);
+
+  state = RETURN_TO_WORK;
+}
+
+void returnToWork()
+{
+    displayState("Rtn2Wrk");
+
+    OrangutanMotors::setSpeeds(0, 0);
 }
 
 
@@ -325,4 +396,168 @@ void transitionAfter(unsigned int duration)
   nextTransitionTime = millis() + duration;
 }
 
+//Add an array of integers together
+unsigned int sum(unsigned int values[], int numOfValues)
+{
+  unsigned int sum = 0;
+  
+  for (unsigned int valueNum = 0; valueNum < numOfValues; valueNum++)
+  {
+    sum += values[valueNum];
+  }
+
+  return sum;
+}
+
+//Add the latest sensor reading to the reading history
+void addToSensorReadingHistory(unsigned int sensorSum)
+{
+  shiftBackReadingHistory();
+  readingHistory[0] = sensorSum;
+}
+
+//Shift all recent sensor readings back one place in the reading history
+void shiftBackReadingHistory()
+{
+  for (unsigned int reading = READING_HISTORY_MAX; reading > 0; reading--)
+  {
+    readingHistory[reading] = readingHistory[reading - 1];
+  }
+}
+
+//Based on the recent history of sensor readings, decide if we are over a "signal" section of track
+//and capture the signal if we are
+void checkForSignal()
+{
+  if (sum(readingHistory, READING_HISTORY_LENGTH) < WHITE_THRESHOLD)
+  {
+    handleSignal(true);
+  }
+  else
+  {
+    handleSignal(false);
+  }
+}
+
+//Handle the receipt of a signal.  There are two cases:
+//  - We enter a white section of track (signal start)
+//  - We leave a white section of track (signal end)
+void handleSignal(boolean isWhite)
+{
+    //We have transitioned from black to white (signal start)
+    if (!onWhite && isWhite)
+    {
+      updateMessage();
+      resetMessageTimer();
+      onWhite = true;
+
+      if (inDebugMode)
+      {
+        signalBeep();
+        displayLastMessage();
+      }
+    }
+
+    //We have transitioned from white to black (signal end)
+    if (onWhite && !isWhite)
+    {
+      onWhite = false;
+    }
+}
+
+//A message will be a count of signals received within the message window
+void updateMessage()
+{
+  if (messageIsBeingReceived)
+  {
+    message++;
+  }
+  else
+  {
+    messageIsBeingReceived = true;
+    message = 1;
+  }
+}
+
+//If a period of time greater than MESSAGE_WINDOW_TIMEOUT elapses between two
+//signals being received, we consider it to be the end of the message.
+//In that case, a further signal would be treated as the start of a new message
+boolean messageReceived()
+{
+  if (messageIsBeingReceived && millis() > messageWindowExpiryTime)
+  {
+    messageIsBeingReceived = false;
+    lastMessage = message;
+    return true;
+  }
+
+  return false;
+}
+
+//Whenever a signal is received, we reset the message timer.
+//In this way, a message may consist of any number of signals.
+void resetMessageTimer()
+{
+  messageWindowExpiryTime = millis() + MESSAGE_WINDOW_TIMEOUT;
+}
+
+//Plays a beep to indicate receipt of a signal
+void signalBeep()
+{
+  OrangutanBuzzer::playFromProgramSpace(signalTune);
+}
+
+//Plays a beep to indicate receipt of a message
+void messageBeep()
+{
+  for (unsigned int beepNum = 0; beepNum < lastMessage; beepNum++)
+  {
+    OrangutanBuzzer::playFromProgramSpace(messageTune);
+    while(OrangutanBuzzer::isPlaying());  //allow one beep to complete before playing the next
+    delay(200);
+  }
+}
+
+//Displays the current (partial) "message" (number of signals within the message window) on the LCD
+void displayPartialMessage()
+{
+  OrangutanLCD::clear();
+  OrangutanLCD::print("Message: ");
+  OrangutanLCD::gotoXY(0, 1);
+  OrangutanLCD::print(message);
+}
+
+//Displays the last complete message received on the LCD
+void displayLastMessage()
+{
+  OrangutanLCD::clear();
+  OrangutanLCD::print("Last Msg: ");
+  OrangutanLCD::gotoXY(0, 1);
+  OrangutanLCD::print(lastMessage);
+}
+
+//Displays the current state when in debug mode
+//TODO: have the enum store brief state string for each state and use that within this function
+void displayState(char *briefState)
+{
+  if (inDebugMode && stateHasChanged())
+  {
+    OrangutanLCD::clear();
+    OrangutanLCD::print("State: ");
+    OrangutanLCD::gotoXY(0, 1);
+    OrangutanLCD::print(briefState);
+  }
+}
+
+//Checks if the state has changed since the last time it was called
+boolean stateHasChanged()
+{
+  if (state != previousState)
+  {
+    previousState = state;
+    return true;
+  }
+
+  return false;
+}
 
