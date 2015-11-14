@@ -30,15 +30,18 @@ Pololu3pi robot;
 const unsigned int NUM_SENSORS = 5;
 unsigned int sensors[NUM_SENSORS];
 
+unsigned int last_proportional = 0;
+long integral = 0;
+
 //To enable accurate verification of whether the sensors are over white or black,
 //we check several sensor readings over a short period.
-const unsigned int READING_HISTORY_LENGTH = 5;
+const unsigned int READING_HISTORY_LENGTH = 3;
 const unsigned int READING_HISTORY_MAX = READING_HISTORY_LENGTH - 1;
-unsigned int readingHistory[READING_HISTORY_LENGTH];
+unsigned int readingHistory[READING_HISTORY_LENGTH] = { 0, 0, 0 };//, 0, 0 };
 
 //If the total of all sensor readings in the recent history is less than this amount,
 //we must be over a white section of line (aka. a "signal")
-const unsigned int WHITE_THRESHOLD = READING_HISTORY_LENGTH * 20;
+const unsigned int WHITE_THRESHOLD = READING_HISTORY_LENGTH * 300;
 boolean onWhite = false;
 
 //Maximum time between two "signals" that will count them as part of the same "message"
@@ -298,41 +301,51 @@ void followLine() {
   addToSensorReadingHistory(sensorSum);
   checkForSignal();
 
-  OrangutanLCD::clear();
-  OrangutanLCD::print("SensorSum");
-  OrangutanLCD::gotoXY(0, 1);
-  OrangutanLCD::print(sensorSum);
+//  OrangutanLCD::clear();
+//  OrangutanLCD::print("SensorSum");
+//  OrangutanLCD::gotoXY(0, 1);
+//  OrangutanLCD::print(sensorSum);
 
-  
-  if (position < 1000)
+  // PID line follower
+  // The "proportional" term should be 0 when we are on the line.
+  int proportional = (int)position - 2000;
+
+  // Compute the derivative (change) and integral (sum) of the
+  // position.
+  int derivative = proportional - last_proportional;
+  integral += proportional;
+
+  // Remember the last position.
+  last_proportional = proportional;
+
+  // Compute the difference between the two motor power settings,
+  // m1 - m2.  If this is a positive number the robot will turn
+  // to the right.  If it is a negative number, the robot will
+  // turn to the left, and the magnitude of the number determines
+  // the sharpness of the turn.  You can adjust the constants by which
+  // the proportional, integral, and derivative terms are multiplied to
+  // improve performance.
+  int power_difference = proportional/20 + integral/10000 + derivative*3/2;
+
+  // Compute the actual motor settings.  We never set either motor
+  // to a negative value.
+  const int maximum = 200;
+  if (power_difference > maximum)
+    power_difference = maximum;
+  if (power_difference < -maximum)
+    power_difference = -maximum;
+
+  if (position == 0 || position == 4000)
   {
-    // We are far to the right of the line: turn left.
-
-    // Set the right motor to 100 and the left motor to zero,
-    // to do a sharp turn to the left.  Note that the maximum
-    // value of either motor speed is 255, so we are driving
-    // it at just about 40% of the max.
-    OrangutanMotors::setSpeeds(0, 100);
-
-    // Just for fun, indicate the direction we are turning on
-    // the LEDs.
-    OrangutanLEDs::left(HIGH);
-    OrangutanLEDs::right(LOW);
-  }
-  else if (position < 3000)
-  {
-    // We are somewhat close to being centered on the line:
-    // drive straight.
-    OrangutanMotors::setSpeeds(100, 100);
-    OrangutanLEDs::left(HIGH);
-    OrangutanLEDs::right(HIGH);
+    //If we see no line at all, just go straight
+    OrangutanMotors::setSpeeds(maximum, maximum);
   }
   else
   {
-    // We are far to the left of the line: turn right.
-    OrangutanMotors::setSpeeds(100, 0);
-    OrangutanLEDs::left(LOW);
-    OrangutanLEDs::right(HIGH);
+    if (power_difference < 0)
+      OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
+    else
+      OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
   }
 }
 
@@ -510,12 +523,11 @@ void signalBeep()
 //Plays a beep to indicate receipt of a message
 void messageBeep()
 {
-  for (unsigned int beepNum = 0; beepNum < lastMessage; beepNum++)
-  {
+//  for (unsigned int beepNum = 0; beepNum < lastMessage; beepNum++)
+//  {
     OrangutanBuzzer::playFromProgramSpace(messageTune);
-    while(OrangutanBuzzer::isPlaying());  //allow one beep to complete before playing the next
-    delay(200);
-  }
+//    while(OrangutanBuzzer::isPlaying());  //allow one beep to complete before playing the next
+//  }
 }
 
 //Displays the current (partial) "message" (number of signals within the message window) on the LCD
