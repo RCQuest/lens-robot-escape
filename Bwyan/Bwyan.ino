@@ -33,11 +33,13 @@ unsigned int sensors[NUM_SENSORS];
 unsigned int last_proportional = 0;
 long integral = 0;
 
+const unsigned int MAX_SPEED = 100;
+
 //To enable accurate verification of whether the sensors are over white or black,
 //we check several sensor readings over a short period.
-const unsigned int READING_HISTORY_LENGTH = 3;
+const unsigned int READING_HISTORY_LENGTH = 5;
 const unsigned int READING_HISTORY_MAX = READING_HISTORY_LENGTH - 1;
-unsigned int readingHistory[READING_HISTORY_LENGTH] = { 0, 0, 0 };//, 0, 0 };
+unsigned int readingHistory[READING_HISTORY_LENGTH] = { 0, 0, 0, 0, 0 };
 
 //If the total of all sensor readings in the recent history is less than this amount,
 //we must be over a white section of line (aka. a "signal")
@@ -329,7 +331,7 @@ void followLine() {
 
   // Compute the actual motor settings.  We never set either motor
   // to a negative value.
-  const int maximum = 200;
+  const int maximum = MAX_SPEED;
   if (power_difference > maximum)
     power_difference = maximum;
   if (power_difference < -maximum)
