@@ -21,37 +21,46 @@
 #include <avr/pgmspace.h>
 
 //When in Debug mode, the buzzer and LCD are used to help verify correct operation
-//When in Fast Start mode, welcome message and calibration steps are skipped (useful for quick testing)
+//Use the other flags to skip 'niceties' for rapid testing
 boolean inDebugMode = true;
-boolean inFastStartMode = false;
+boolean skipWelcome = true;
+boolean skipCalibration = false;
 
 Pololu3pi robot;
 
 const unsigned int NUM_SENSORS = 5;
 unsigned int sensors[NUM_SENSORS];
 
+//PID (Proportional, Integral, Differential) control parameters
 unsigned int last_proportional = 0;
 long integral = 0;
 
+//TODO: Replace with "targetMaxSpeed" variable and have constants such as "CAREFUL_MAX_SPEED" and "TURBO_MAX_SPEED"
 const unsigned int MAX_SPEED = 100;
 
-//To enable accurate verification of whether the sensors are over white or black,
+//To enable accurate verification of whether the sensors are over signal or black,
 //we check several sensor readings over a short period.
 const unsigned int READING_HISTORY_LENGTH = 5;
-const unsigned int READING_HISTORY_MAX = READING_HISTORY_LENGTH - 1;
-unsigned int readingHistory[READING_HISTORY_LENGTH] = { 0, 0, 0, 0, 0 };
+unsigned int readingHistory[READING_HISTORY_LENGTH];
+unsigned int nextReading = 0;
 
-//If the total of all sensor readings in the recent history is less than this amount,
-//we must be over a white section of line (aka. a "signal")
-const unsigned int WHITE_THRESHOLD = READING_HISTORY_LENGTH * 300;
-boolean onWhite = false;
+//Set the threshold below which a sensor reading will be assumed to indicate a "white" section of track
+//(Sensor readings are between 0 and 1000)
+unsigned int WHITE_THRESHOLD = 300;
+
+//If SIGNAL_THRESHOLD out of READING_HISTORY_LENGTH sensor readings appear to be signals, we
+//must be over a signal section of line
+const unsigned int SIGNAL_TOLERANCE = 1;
+const unsigned int SIGNAL_THRESHOLD = READING_HISTORY_LENGTH - SIGNAL_TOLERANCE;
+boolean onSignal = false;
 
 //Maximum time between two "signals" that will count them as part of the same "message"
-const unsigned int MESSAGE_WINDOW_TIMEOUT = 500; //milliseconds
-unsigned int messageWindowExpiryTime;
+const unsigned long MESSAGE_WINDOW_TIMEOUT = 500; //milliseconds
+unsigned long messageWindowExpiryTime;
+
 boolean messageIsBeingReceived = false;
 unsigned int message = 0; //the message currently being received
-unsigned int lastMessage = 3; //the last complete message received
+unsigned int lastMessage = 0; //the last complete message received
 
 // Introductory messages.  The "PROGMEM" identifier causes the data to
 // go into program space.
@@ -87,16 +96,19 @@ const char levels[] PROGMEM = {
   0b11111
 };
 
-enum State  { INIT, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP_THE_LOOP, BARREL_ROLL, RETURN_TO_WORK };
-State state = INIT;
-State previousState = INIT;
+//All possible states
+//Set state and previousState to "TEST" for rapid development using the test() function
+enum State  { TEST, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP_THE_LOOP, BARREL_ROLL, RETURN_TO_WORK };
+State state = TEST;
+State previousState = TEST;
 State nextState;
 
-const unsigned int NEVER = 0;
-const unsigned int MORNING_DURATION = 6000;
-const unsigned int BORED_DURATION = 3000;
-const unsigned int CHECK_FOR_BOSS_PAUSE = 1000;
-unsigned int nextTransitionTime = NEVER;
+//Time-based state transition control
+const unsigned long NEVER = 0;
+const unsigned long MORNING_DURATION = 6000;
+const unsigned long BORED_DURATION = 3000;
+const unsigned long CHECK_FOR_BOSS_PAUSE = 1000;
+unsigned long nextTransitionTime = NEVER;
 
 // This function loads custom characters into the LCD.  Up to 8
 // characters can be loaded; we use them for 7 levels of a bar graph.
@@ -117,7 +129,8 @@ void display_readings(const unsigned int *calibrated_values)
 {
   unsigned char i;
 
-  for (i=0;i<5;i++) {
+  for (i = 0; i < 5; i++)
+  {
     // Initialize the array of characters that we will use for the
     // graph.  Using the space, an extra copy of the one-bar
     // character, and character 255 (a full black box), we get 10
@@ -134,25 +147,12 @@ void display_readings(const unsigned int *calibrated_values)
   }
 }
 
-// Initializes the 3pi, displays a welcome message, calibrates, and
-// plays the initial music.  This function is automatically called
-// by the Arduino framework at the start of program execution.
-void setup()
+//Display welcome message on LCD at startup.  For fast start during rapid testing, this can be
+//skipped by setting skipWelcome to true
+void displayWelcomeMessage()
 {
-  unsigned int counter; // used as a simple timer
-
-  // This must be called at the beginning of 3pi code, to set up the
-  // sensors.  We use a value of 2000 for the timeout, which
-  // corresponds to 2000*0.4 us = 0.8 ms on our 20 MHz processor.
-  robot.init(2000);
-
-  load_custom_characters(); // load the custom characters
-
-  OrangutanBuzzer::playFromProgramSpace(welcome);
-
-  if (!inFastStartMode)
+  if (!skipWelcome)
   {
-    // Play welcome music and display a message
     OrangutanLCD::printFromProgramSpace(welcome_line1);
     OrangutanLCD::gotoXY(0, 1);
     OrangutanLCD::printFromProgramSpace(welcome_line2);
@@ -164,7 +164,11 @@ void setup()
     OrangutanLCD::printFromProgramSpace(demo_name_line2);
     delay(1000);
   }
+}
 
+//Display battery voltage on LCD until a button is pressed
+void displayBatteryVoltage()
+{
   // Display battery voltage and wait for button press
   while (!OrangutanPushbuttons::isPressed(BUTTON_B))
   {
@@ -178,18 +182,24 @@ void setup()
 
     delay(100);
   }
+}
 
-  // Always wait for the button to be released so that 3pi doesn't
-  // start moving until your hand is away from it.
-  OrangutanPushbuttons::waitForRelease(BUTTON_B);
-
-  if (!inFastStartMode)
+//Adjust sensor sensitivity based on reflectance of the track surface.
+//Can be skipped during rapid testing by setting the skipCalibration parameter to true.
+void calibrateSensors()
+{
+  if (!skipCalibration)
   {
+    unsigned int counter; // used as a simple timer
+
+    // Always wait for the button to be released so that 3pi doesn't
+    // start moving until your hand is away from it.
+    OrangutanPushbuttons::waitForRelease(BUTTON_B);
     delay(1000);
     
     // Auto-calibration: turn right and left while calibrating the
     // sensors.
-    for (counter=0; counter<80; counter++)
+    for (counter = 0; counter < 80; counter++)
     {
       if (counter < 20 || counter >= 60)
         OrangutanMotors::setSpeeds(40, -40);
@@ -204,9 +214,10 @@ void setup()
       robot.calibrateLineSensors(IR_EMITTERS_ON);
   
       // Since our counter runs to 80, the total delay will be
-      // 80*20 = 1600 ms.
+      // 80 * 20 = 1600 ms.
       delay(20);
     }
+
     OrangutanMotors::setSpeeds(0, 0);
   
     // Display calibrated values as a bar graph.
@@ -227,8 +238,30 @@ void setup()
   
       delay(100);
     }
-    OrangutanPushbuttons::waitForRelease(BUTTON_B);
   }
+}
+
+// Initializes the 3pi, displays a welcome message, calibrates, and
+// plays the initial music.  This function is automatically called
+// by the Arduino framework at the start of program execution.
+void setup()
+{
+  // This must be called at the beginning of 3pi code, to set up the
+  // sensors.  We use a value of 2000 for the timeout, which
+  // corresponds to 2000*0.4 us = 0.8 ms on our 20 MHz processor.
+  robot.init(2000);
+  
+  load_custom_characters(); // load the custom characters
+
+  clearSensorReadingHistory();
+
+  OrangutanBuzzer::playFromProgramSpace(welcome);
+  
+  displayWelcomeMessage();
+  displayBatteryVoltage();
+  calibrateSensors();
+  
+  OrangutanPushbuttons::waitForRelease(BUTTON_B);
   
   OrangutanLCD::clear();
   OrangutanLCD::print("Go!");    
@@ -236,8 +269,6 @@ void setup()
   // Play music and wait for it to finish before we start driving.
   OrangutanBuzzer::playFromProgramSpace(go);
   while(OrangutanBuzzer::isPlaying());
-
-  state = START_WORK;
 }
 
 // The main function.  This function is repeatedly called by
@@ -261,6 +292,7 @@ void loop()
 
   switch(state)
   {
+    case TEST: test(); break;
     case START_WORK: startWork(); break;
     case FOLLOW_LINE: followLine(); break;
     case GET_BORED: getBored(); break;
@@ -284,29 +316,27 @@ void startWork()
   displayState("StartWrk");
   
   state = FOLLOW_LINE;
-//  nextState = GET_BORED;
-//  transitionAfter(MORNING_DURATION);
+  nextState = GET_BORED;
+  transitionAfter(MORNING_DURATION);
 }
 
 //Tracks a black line on a light background and monitors for
 //signals (which trigger state changes)
 void followLine() {
-  //TODO: Implement PID control (if Andrew Mason didn't already do this)
   displayState("FollowLn");
   
-  // Get the position of the line.  Note that we *must* provide
-  // the "sensors" argument to read_line() here, even though we
-  // are not interested in the individual sensor readings.
   unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
 
-  unsigned int sensorSum = sum(sensors, NUM_SENSORS);
-  addToSensorReadingHistory(sensorSum);
-  checkForSignal();
+  if (readingIndicatesSignal())
+  {
+    addToSensorReadingHistory(1);
+  }
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
 
-//  OrangutanLCD::clear();
-//  OrangutanLCD::print("SensorSum");
-//  OrangutanLCD::gotoXY(0, 1);
-//  OrangutanLCD::print(sensorSum);
+  checkForSignal();
 
   // PID line follower
   // The "proportional" term should be 0 when we are on the line.
@@ -332,6 +362,7 @@ void followLine() {
   // Compute the actual motor settings.  We never set either motor
   // to a negative value.
   const int maximum = MAX_SPEED;
+  
   if (power_difference > maximum)
     power_difference = maximum;
   if (power_difference < -maximum)
@@ -359,19 +390,23 @@ void getBored()
   transitionAfter(BORED_DURATION);
 }
 
-//'Looks' left and right
+//'Looks' left and right, in a furtive fashion
 void checkForTheBoss() {
   displayState("ChkBoss");
 
   unsigned int counter;
   
-  for (counter=0; counter<80; counter++) {
-    if (counter < 20 || counter >= 60) {
-      OrangutanMotors::setSpeeds(-40, 40);
+  for (counter = 0; counter < 80; counter++) {
+    if (counter < 20 || counter >= 60)
+    {
+      OrangutanMotors::setSpeeds(-20, 20);
     }
-    else {
-      OrangutanMotors::setSpeeds(40, -40);
+    else
+    {
+      OrangutanMotors::setSpeeds(20, -20);
     }
+
+    delay(20); //80 * 20 = 1600ms
   } 
   
   OrangutanMotors::setSpeeds(0, 0);
@@ -386,27 +421,90 @@ void goOffRoad()
 {
   displayState("GoOffRd");
 
-  OrangutanMotors::setSpeeds(40, -40);
+  OrangutanMotors::setSpeeds(30, -30);
 
   //TODO: implement high-speed escape, and everything thereafter
 
-  delay(1000);
+  delay(300);
 
   state = RETURN_TO_WORK;
 }
 
 void returnToWork()
 {
-    displayState("Rtn2Wrk");
+  displayState("Rtn2Wrk");
 
-    OrangutanMotors::setSpeeds(0, 0);
+  //TODO: go back to boring line-following mode
+  OrangutanMotors::setSpeeds(0, 0);
+}
+
+//Function used to quickly test functionality
+void test()
+{
+  displayState("Test");
+  
+  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+  if (readingIndicatesSignal())
+  {
+    addToSensorReadingHistory(1);
+  }
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
+
+  checkForSignal();
+
+  // PID line follower
+  // The "proportional" term should be 0 when we are on the line.
+  int proportional = (int)position - 2000;
+
+  // Compute the derivative (change) and integral (sum) of the
+  // position.
+  int derivative = proportional - last_proportional;
+  integral += proportional;
+
+  // Remember the last position.
+  last_proportional = proportional;
+
+  // Compute the difference between the two motor power settings,
+  // m1 - m2.  If this is a positive number the robot will turn
+  // to the right.  If it is a negative number, the robot will
+  // turn to the left, and the magnitude of the number determines
+  // the sharpness of the turn.  You can adjust the constants by which
+  // the proportional, integral, and derivative terms are multiplied to
+  // improve performance.
+  int power_difference = proportional/20 + integral/10000 + derivative*3/2;
+
+  // Compute the actual motor settings.  We never set either motor
+  // to a negative value.
+  const int maximum = MAX_SPEED;
+  
+  if (power_difference > maximum)
+    power_difference = maximum;
+  if (power_difference < -maximum)
+    power_difference = -maximum;
+
+  if (position == 0 || position == 4000)
+  {
+    //If we see no line at all, just go straight
+    OrangutanMotors::setSpeeds(maximum, maximum);
+  }
+  else
+  {
+    if (power_difference < 0)
+      OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
+    else
+      OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
+  }
 }
 
 
 /////////////////UTILITIES/////////////////////
 
 //Set time at which next transition will happen
-void transitionAfter(unsigned int duration)
+void transitionAfter(unsigned long duration)
 {
   nextTransitionTime = millis() + duration;
 }
@@ -424,74 +522,103 @@ unsigned int sum(unsigned int values[], int numOfValues)
   return sum;
 }
 
-//Add the latest sensor reading to the reading history
-void addToSensorReadingHistory(unsigned int sensorSum)
+//Return true if the sensor is above a "white" section of track
+boolean isWhite(unsigned int sensorReading)
 {
-  shiftBackReadingHistory();
-  readingHistory[0] = sensorSum;
+  return sensorReading < WHITE_THRESHOLD;
 }
 
-//Shift all recent sensor readings back one place in the reading history
-void shiftBackReadingHistory()
+//Return true if the sensor is above a "black" section of track
+boolean isBlack(unsigned int sensorReading)
 {
-  for (unsigned int reading = READING_HISTORY_MAX; reading > 0; reading--)
+  return !isWhite(sensorReading);
+}
+
+//If the sensor reading indicates "BWB" within it, this may be a signal section
+//Any of these readings could indicate a potential signal condition:
+//  WWBWB
+//  WBWBW
+//  BWBWW
+boolean readingIndicatesSignal()
+{
+  //Check for WBWBW
+  if (isWhite(sensors[0]) && isBlack(sensors[1]) && isWhite(sensors[2]) && isBlack(sensors[3]) && isWhite(sensors[4]))
   {
-    readingHistory[reading] = readingHistory[reading - 1];
+    return true;
   }
+
+  //Check for WWBWB
+  if (isWhite(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isBlack(sensors[4]))
+  {
+    return true;
+  }
+
+  //Check for BWBWW
+  if (isBlack(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
+  {
+    return true;
+  }
+
+  return false;
+}
+
+//Add the latest sensor reading to the reading history
+void addToSensorReadingHistory(unsigned int reading)
+{
+  readingHistory[nextReading] = reading;
+  nextReading = (nextReading + 1) % READING_HISTORY_LENGTH;
+}
+
+void clearSensorReadingHistory()
+{
+  for (unsigned int readingNum = 0; readingNum < READING_HISTORY_LENGTH; readingNum++)
+  {
+    readingHistory[readingNum] = 0;
+  }
+
+  nextReading = 0;
 }
 
 //Based on the recent history of sensor readings, decide if we are over a "signal" section of track
 //and capture the signal if we are
 void checkForSignal()
 {
-  if (sum(readingHistory, READING_HISTORY_LENGTH) < WHITE_THRESHOLD)
+  if (sum(readingHistory, READING_HISTORY_LENGTH) >= SIGNAL_THRESHOLD)
   {
-    handleSignal(true);
+    handleSignalling(true);
   }
   else
   {
-    handleSignal(false);
+    handleSignalling(false);
   }
 }
 
 //Handle the receipt of a signal.  There are two cases:
-//  - We enter a white section of track (signal start)
-//  - We leave a white section of track (signal end)
-void handleSignal(boolean isWhite)
+//  - We enter a signal section of track (signal start)
+//  - We leave a signal section of track (signal end)
+void handleSignalling(boolean isSignal)
 {
-    //We have transitioned from black to white (signal start)
-    if (!onWhite && isWhite)
+    //We have transitioned from black to signal (signal start)
+    if (!onSignal && isSignal)
     {
-      updateMessage();
+      messageIsBeingReceived = true;
+      message++;
       resetMessageTimer();
-      onWhite = true;
+      onSignal = true;
 
       if (inDebugMode)
       {
         signalBeep();
-        displayLastMessage();
+        displayPartialMessage();
       }
     }
 
-    //We have transitioned from white to black (signal end)
-    if (onWhite && !isWhite)
+    //We have transitioned from signal to black (signal end)
+    if (onSignal && !isSignal)
     {
-      onWhite = false;
+      onSignal = false;
+      clearSensorReadingHistory();
     }
-}
-
-//A message will be a count of signals received within the message window
-void updateMessage()
-{
-  if (messageIsBeingReceived)
-  {
-    message++;
-  }
-  else
-  {
-    messageIsBeingReceived = true;
-    message = 1;
-  }
 }
 
 //If a period of time greater than MESSAGE_WINDOW_TIMEOUT elapses between two
@@ -503,6 +630,7 @@ boolean messageReceived()
   {
     messageIsBeingReceived = false;
     lastMessage = message;
+    message = 0;
     return true;
   }
 
@@ -525,11 +653,7 @@ void signalBeep()
 //Plays a beep to indicate receipt of a message
 void messageBeep()
 {
-//  for (unsigned int beepNum = 0; beepNum < lastMessage; beepNum++)
-//  {
-    OrangutanBuzzer::playFromProgramSpace(messageTune);
-//    while(OrangutanBuzzer::isPlaying());  //allow one beep to complete before playing the next
-//  }
+  OrangutanBuzzer::playFromProgramSpace(messageTune);
 }
 
 //Displays the current (partial) "message" (number of signals within the message window) on the LCD
@@ -574,4 +698,3 @@ boolean stateHasChanged()
 
   return false;
 }
-
