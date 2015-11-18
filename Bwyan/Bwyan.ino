@@ -35,8 +35,13 @@ unsigned int sensors[NUM_SENSORS];
 unsigned int last_proportional = 0;
 long integral = 0;
 
-//TODO: Replace with "targetMaxSpeed" variable and have constants such as "CAREFUL_MAX_SPEED" and "TURBO_MAX_SPEED"
-const unsigned int MAX_SPEED = 100;
+const unsigned int TURBO_MAX_SPEED = 200;
+const unsigned int FAST_MAX_SPEED = 200;
+const unsigned int NORMAL_MAX_SPEED = 100;
+const unsigned int SLOW_MAX_SPEED = 50;
+const unsigned int CAREFUL_MAX_SPEED = 30;
+const unsigned int STOP = 0;
+unsigned int targetSpeed = NORMAL_MAX_SPEED;
 
 //To enable accurate verification of whether the sensors are over signal or black,
 //we check several sensor readings over a short period.
@@ -58,9 +63,13 @@ boolean onSignal = false;
 const unsigned long MESSAGE_WINDOW_TIMEOUT = 500; //milliseconds
 unsigned long messageWindowExpiryTime;
 
+const unsigned int MSG_SLOW = 2;
+const unsigned int MSG_TURBO = 3;
+const unsigned int MSG_RETURN_TO_WORK = 5;
 boolean messageIsBeingReceived = false;
 unsigned int message = 0; //the message currently being received
 unsigned int lastMessage = 0; //the last complete message received
+
 
 // Introductory messages.  The "PROGMEM" identifier causes the data to
 // go into program space.
@@ -288,6 +297,21 @@ void loop()
       messageBeep();
       displayLastMessage();
     }
+
+    switch(state)
+    {
+      case TEST:
+      {
+        switch(lastMessage)
+        {
+          case MSG_SLOW: targetSpeed = SLOW_MAX_SPEED; break;
+          case MSG_TURBO: targetSpeed = TURBO_MAX_SPEED; break;
+          case MSG_RETURN_TO_WORK: state = RETURN_TO_WORK; break;
+        }
+      }; break;
+
+      default: break;
+    }
   }
 
   switch(state)
@@ -361,7 +385,7 @@ void followLine() {
 
   // Compute the actual motor settings.  We never set either motor
   // to a negative value.
-  const int maximum = MAX_SPEED;
+  const int maximum = targetSpeed;
   
   if (power_difference > maximum)
     power_difference = maximum;
@@ -479,7 +503,7 @@ void test()
 
   // Compute the actual motor settings.  We never set either motor
   // to a negative value.
-  const int maximum = MAX_SPEED;
+  const int maximum = targetSpeed;
   
   if (power_difference > maximum)
     power_difference = maximum;
