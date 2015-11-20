@@ -51,16 +51,16 @@ unsigned int nextReading = 0;
 
 //Set the threshold below which a sensor reading will be assumed to indicate a "white" section of track
 //(Sensor readings are between 0 and 1000)
-unsigned int WHITE_THRESHOLD = 300;
+unsigned int WHITE_THRESHOLD = 200;
 
 //If SIGNAL_THRESHOLD out of READING_HISTORY_LENGTH sensor readings appear to be signals, we
 //must be over a signal section of line
-const unsigned int SIGNAL_TOLERANCE = 1;
+const unsigned int SIGNAL_TOLERANCE = 2;
 const unsigned int SIGNAL_THRESHOLD = READING_HISTORY_LENGTH - SIGNAL_TOLERANCE;
 boolean onSignal = false;
 
 //Maximum time between two "signals" that will count them as part of the same "message"
-const unsigned long MESSAGE_WINDOW_TIMEOUT = 500; //milliseconds
+const unsigned long MESSAGE_WINDOW_TIMEOUT = 400; //milliseconds
 unsigned long messageWindowExpiryTime;
 
 const unsigned int MSG_SLOW = 2;
@@ -324,7 +324,7 @@ void loop()
     case GO_OFF_ROAD: goOffRoad(); break;
     case ENTER_CABLE_CAR: break;
     case BALANCE_ON_BEAM: break; // followLine or PIDfollowline() ?
-    case REVERSE_DOWN_RAMP: reverDownRamp();
+    //case REVERSE_DOWN_RAMP: reverseDownRamp();
     case LOOP_THE_LOOP: break;
     case BARREL_ROLL: break;
     case RETURN_TO_WORK: returnToWork(); break;
@@ -454,7 +454,7 @@ void goOffRoad()
 
   state = RETURN_TO_WORK;
 }
-
+/*
 void reverseDownRamp() {
   displayState("Reverse");
 
@@ -464,7 +464,7 @@ void reverseDownRamp() {
   }
   OrangutanMotors::setSpeeds(40, -40);
   
-}
+}*/
 
 void returnToWork()
 {
@@ -492,6 +492,8 @@ void test()
 
   checkForSignal();
 
+  if (!onSignal)
+  {
   // PID line follower
   // The "proportional" term should be 0 when we are on the line.
   int proportional = (int)position - 2000;
@@ -511,7 +513,7 @@ void test()
   // the sharpness of the turn.  You can adjust the constants by which
   // the proportional, integral, and derivative terms are multiplied to
   // improve performance.
-  int power_difference = proportional/20 + integral/10000 + derivative*3/2;
+  int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
 
   // Compute the actual motor settings.  We never set either motor
   // to a negative value.
@@ -533,6 +535,8 @@ void test()
       OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
     else
       OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
+  }
+
   }
 }
 
@@ -570,27 +574,21 @@ boolean isBlack(unsigned int sensorReading)
   return !isWhite(sensorReading);
 }
 
-//If the sensor reading indicates "BWB" within it, this may be a signal section
+//If the sensor reading indicates "BWWWB" within it, this may be a signal section
 //Any of these readings could indicate a potential signal condition:
-//  WWBWB
-//  WBWBW
-//  BWBWW
+//  BWWxB
+//  BxWWB
 boolean readingIndicatesSignal()
 {
-  //Check for WBWBW
-  if (isWhite(sensors[0]) && isBlack(sensors[1]) && isWhite(sensors[2]) && isBlack(sensors[3]) && isWhite(sensors[4]))
+
+  //Check for BWWxB
+  if (isBlack(sensors[0]) && isWhite(sensors[1]) && isWhite(sensors[2]) && isBlack(sensors[4]))
   {
     return true;
   }
 
-  //Check for WWBWB
-  if (isWhite(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isBlack(sensors[4]))
-  {
-    return true;
-  }
-
-  //Check for BWBWW
-  if (isBlack(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
+  //Check for BxWWB
+  if (isBlack(sensors[0]) && isWhite(sensors[2]) && isWhite(sensors[3]) && isBlack(sensors[4]))
   {
     return true;
   }
