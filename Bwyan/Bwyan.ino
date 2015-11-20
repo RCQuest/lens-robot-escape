@@ -107,7 +107,7 @@ const char levels[] PROGMEM = {
 
 //All possible states
 //Set state and previousState to "TEST" for rapid development using the test() function
-enum State  { TEST, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, LOOP_THE_LOOP, BARREL_ROLL, RETURN_TO_WORK };
+enum State  { TEST, START_WORK, FOLLOW_LINE, GET_BORED, CHECK_FOR_THE_BOSS, GO_OFF_ROAD, ENTER_CABLE_CAR, BALANCE_ON_BEAM, REVERSE_DOWN_RAMP, LOOP_THE_LOOP, BARREL_ROLL, RETURN_TO_WORK };
 State state = TEST;
 State previousState = TEST;
 State nextState;
@@ -323,7 +323,8 @@ void loop()
     case CHECK_FOR_THE_BOSS: checkForTheBoss(); break;
     case GO_OFF_ROAD: goOffRoad(); break;
     case ENTER_CABLE_CAR: break;
-    case BALANCE_ON_BEAM: break;
+    case BALANCE_ON_BEAM: break; // followLine or PIDfollowline() ?
+    case REVERSE_DOWN_RAMP: reverDownRamp();
     case LOOP_THE_LOOP: break;
     case BARREL_ROLL: break;
     case RETURN_TO_WORK: returnToWork(); break;
@@ -452,6 +453,17 @@ void goOffRoad()
   delay(300);
 
   state = RETURN_TO_WORK;
+}
+
+void reverseDownRamp() {
+  displayState("Reverse");
+
+  for (counter = 0; counter < 30; counter++) {
+    OrangutanMotors::setSpeeds(40, -40);
+    counter++;
+  }
+  OrangutanMotors::setSpeeds(40, -40);
+  
 }
 
 void returnToWork()
