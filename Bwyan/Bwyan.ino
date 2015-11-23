@@ -119,15 +119,18 @@ enum State  {
               GO_OFF_ROAD, 
               ENTER_CABLE_CAR, 
               BALANCE_ON_BEAM, 
-              REVERSE_DOWN_RAMP, 
+              FOLLOW_LINE_REVERSE, 
               LOOP_THE_LOOP, 
               BARREL_ROLL, 
               RETURN_TO_WORK,
               SHUTDOWN
             };
-              
-State state = TEST;
-State previousState = TEST;
+
+// change this to initial state
+/*State state = TEST;
+State previousState = TEST;*/
+State state = FOLLOW_LINE_REVERSE;
+State previousState = FOLLOW_LINE_REVERSE;
 State nextState;
 
 //Time-based state transition control
@@ -376,7 +379,7 @@ void loop()
     case GO_OFF_ROAD: goOffRoad(); break;
     case ENTER_CABLE_CAR: break;
     case BALANCE_ON_BEAM: break; // followLine or PIDfollowline() ?
-    //case REVERSE_DOWN_RAMP: reverseDownRamp();
+    case FOLLOW_LINE_REVERSE: followLineInReverse();
     case LOOP_THE_LOOP: break;
     case BARREL_ROLL: break;
     case RETURN_TO_WORK: returnToWork(); break;
@@ -612,17 +615,66 @@ void goOffRoad()
 
   state = RETURN_TO_WORK;
 }
-/*
-void reverseDownRamp() {
-  displayState("Reverse");
 
-  for (counter = 0; counter < 30; counter++) {
-    OrangutanMotors::setSpeeds(40, -40);
-    counter++;
+void followLineInReverse() {
+  displayState("Reversing");
+
+  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+  if (readingIndicatesSignal())
+  {
+    addToSensorReadingHistory(1);
   }
-  OrangutanMotors::setSpeeds(40, -40);
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
+
+  checkForSignal();
+
+  // PID line follower
+  // The "proportional" term should be 0 when we are on the line.
+  int proportional = (int)position - 2000;
+
+  // Compute the derivative (change) and integral (sum) of the
+  // position.
+  int derivative = proportional - lastProportional;
+  integral += proportional;
+
+  // Remember the last position.
+  lastProportional = proportional;
+
+  // Compute the difference between the two motor power settings,
+  // m1 - m2.  If this is a positive number the robot will turn
+  // to the right.  If it is a negative number, the robot will
+  // turn to the left, and the magnitude of the number determines
+  // the sharpness of the turn.  You can adjust the constants by which
+  // the proportional, integral, and derivative terms are multiplied to
+  // improve performance.
+  int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
+
+  // Compute the actual motor settings.  We never set either motor
+  // to a negative value.
+  const int maximum = targetSpeed;
   
-}*/
+  if (power_difference > maximum)
+    power_difference = maximum;
+  if (power_difference < -maximum)  
+    power_difference = -maximum;
+
+  if (position == 0 || position == 4000)
+  {
+    //If we see no line at all, just go straight
+    OrangutanMotors::setSpeeds(-maximum, -maximum);
+  }
+  else
+  {
+    if (power_difference < 0)
+      OrangutanMotors::setSpeeds(-1 * (maximum + power_difference), -1 * maximum);
+    else
+      OrangutanMotors::setSpeeds(-1 * maximum, -1 * (maximum - power_difference));
+  }
+}
 
 void returnToWork()
 {
