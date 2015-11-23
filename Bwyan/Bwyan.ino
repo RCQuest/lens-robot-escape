@@ -40,8 +40,13 @@ const unsigned int FAST_MAX_SPEED = 200;
 const unsigned int NORMAL_MAX_SPEED = 100;
 const unsigned int SLOW_MAX_SPEED = 50;
 const unsigned int CAREFUL_MAX_SPEED = 30;
+const unsigned int REVERSING_MAX_SPEED = 50;
 const unsigned int STOP = 0;
 unsigned int targetSpeed = FAST_MAX_SPEED;
+
+//Spinning on the spot
+const unsigned int SPIN_SPEED = 40;
+const unsigned long TIME_TO_TURN_AROUND = 800; //ms
 
 //To enable accurate verification of whether the sensors are over signal or black,
 //we check several sensor readings over a short period.
@@ -62,42 +67,39 @@ boolean onSignal = false;
 //Maximum 'distance' between two signals such that they are counted as part of the same message
 //This 'distance' is in undefined units, but we want it to remain constant, regardless of speed
 //A value of 30 is calculated on the basis that we wish the max time between signals to be 300ms at "100" (normal) speed
-//time = distance / speed   [0.3 = MAX_MESSAGE_DISTANCE / 100]
-const unsigned int MAX_MESSAGE_DISTANCE = 30;
+//time = distance / speed   [250ms = MAX_MESSAGE_DISTANCE / 100]
+const unsigned int MAX_MESSAGE_DISTANCE = 25000;
 unsigned long messageWindowExpiryTime;
 
+/*
+ * Message Code Card
+ *   1. Set Speed Normal
+ *   2. Reverse (stop, spin around and reverse at normal speed)
+ *      1. Stop reversing and return to normal speed forwards
+ *   3. Set Speed Careful
+ *   4. Set Speed Slow
+ *   5. Set Speed Fast
+ *   6. Set Speed Turbo
+ *   7. Special
+ *      1. Zip line
+ */
+
 enum MessageCode  {
-                    SET_SPEED = 1, 
-                    SET_SPEED_REVERSE = 1,
-                    SET_SPEED_CAREFUL = 2,
-                    SET_SPEED_SLOW = 3,
-                    SET_SPEED_NORMAL = 4,
+                    SET_SPEED_NORMAL = 1,
+                    SET_SPEED_REVERSE = 2,
+                    STOP_REVERSING = 1,
+                    SET_SPEED_CAREFUL = 3,
+                    SET_SPEED_SLOW = 4,
                     SET_SPEED_FAST = 5,
                     SET_SPEED_TURBO = 6,
-                    STOP_REVERSING = 1,
-
-                    CORNER_AHEAD = 2,
-                    LEFT_TURN = 1,
-                    RIGHT_TURN = 2,
-                    END_OF_CORNER = 1,
-
-                    OBSTACLE_AHEAD = 3,
-                    ZIP_WIRE = 1,
-                    END_OF_OBSTACLE = 1                                        
+                    SPECIAL = 7,
+                    ZIP_WIRE = 1
                   };
                 
 enum MessageState { 
                     READY_TO_RECEIVE,
-
-                    AWAITING_SPEED_INFO,
                     REVERSING,
-                    
-                    AWAITING_CORNER_INFO,
-                    TURNING_LEFT,
-                    TURNING_RIGHT,
-
-                    AWAITING_OBSTACLE_INFO,
-                    ON_ZIP_WIRE
+                    AWAITING_ADDITIONAL_INFO
                   };
 
 const unsigned int MSG_SLOW = 2;
@@ -117,11 +119,8 @@ enum State  {
               GET_BORED, 
               CHECK_FOR_THE_BOSS, 
               GO_OFF_ROAD, 
-              ENTER_CABLE_CAR, 
-              BALANCE_ON_BEAM, 
-              REVERSE_DOWN_RAMP, 
-              LOOP_THE_LOOP, 
-              BARREL_ROLL, 
+              TURN_AROUND,
+              REVERSE, 
               RETURN_TO_WORK,
               SHUTDOWN
             };
@@ -130,7 +129,7 @@ State state = TEST;
 State previousState = TEST;
 State nextState;
 
-//Time-based state transition control
+//Time-based state transition control (milliseconds)
 const unsigned long NEVER = 0;
 const unsigned long MORNING_DURATION = 6000;
 const unsigned long BORED_DURATION = 3000;
@@ -272,9 +271,9 @@ void calibrateSensors()
     for (counter = 0; counter < 80; counter++)
     {
       if (counter < 20 || counter >= 60)
-        OrangutanMotors::setSpeeds(40, -40);
+        OrangutanMotors::setSpeeds(SPIN_SPEED, -SPIN_SPEED);
       else
-        OrangutanMotors::setSpeeds(-40, 40);
+        OrangutanMotors::setSpeeds(-SPIN_SPEED, SPIN_SPEED);
   
       // This function records a set of sensor readings and keeps
       // track of the minimum and maximum values encountered.  The
@@ -374,11 +373,8 @@ void loop()
     case GET_BORED: getBored(); break;
     case CHECK_FOR_THE_BOSS: checkForTheBoss(); break;
     case GO_OFF_ROAD: goOffRoad(); break;
-    case ENTER_CABLE_CAR: break;
-    case BALANCE_ON_BEAM: break; // followLine or PIDfollowline() ?
-    //case REVERSE_DOWN_RAMP: reverseDownRamp();
-    case LOOP_THE_LOOP: break;
-    case BARREL_ROLL: break;
+    case TURN_AROUND: turnAround(); break;
+    case REVERSE: followLineInReverse(); break;
     case RETURN_TO_WORK: returnToWork(); break;
     case SHUTDOWN: finish(); break;
     default: break;
@@ -412,25 +408,14 @@ void processMessages()
       {
         switch(lastMessage)
         {
-          case SET_SPEED: displayMessageState("SetSpeed"); messageState = AWAITING_SPEED_INFO; break;
-          case CORNER_AHEAD: displayMessageState("Corner"); messageState = AWAITING_CORNER_INFO; break;
-          case OBSTACLE_AHEAD: displayMessageState("Obstacle"); messageState = AWAITING_CORNER_INFO; break;
-          default: break;
-        }
-      }; break;
-
-///SPEED CONTROL
-      case AWAITING_SPEED_INFO:
-      {
-        switch(lastMessage)
-        {
-          case SET_SPEED_REVERSE: displayMessageState("Reverse"); messageState = REVERSING; break;
-          case SET_SPEED_CAREFUL: displayMessageState("Careful"); messageState = READY_TO_RECEIVE; break;
-          case SET_SPEED_SLOW: displayMessageState("Slow"); messageState = READY_TO_RECEIVE; break;
-          case SET_SPEED_NORMAL: displayMessageState("Normal"); messageState = READY_TO_RECEIVE; break;
-          case SET_SPEED_FAST: displayMessageState("Fast"); messageState = READY_TO_RECEIVE; break;
-          case SET_SPEED_TURBO: displayMessageState("Turbo"); messageState = READY_TO_RECEIVE; break;
-          default: break;
+          case SET_SPEED_NORMAL: displayMessageState("Normal"); targetSpeed = NORMAL_MAX_SPEED; break;
+          case SET_SPEED_REVERSE: displayMessageState("Reverse"); state = TURN_AROUND; nextState = REVERSE; messageState = REVERSING; break;
+          case SET_SPEED_CAREFUL: displayMessageState("Careful"); targetSpeed = CAREFUL_MAX_SPEED; break;
+          case SET_SPEED_SLOW: displayMessageState("Slow"); targetSpeed = SLOW_MAX_SPEED; break;
+          case SET_SPEED_FAST: displayMessageState("Fast"); targetSpeed = FAST_MAX_SPEED; break;
+          case SET_SPEED_TURBO: displayMessageState("Turbo"); targetSpeed = TURBO_MAX_SPEED; break;
+          case SPECIAL: displayMessageState("Special"); messageState = AWAITING_ADDITIONAL_INFO; break;
+          default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
         }
       }; break;
 
@@ -438,49 +423,16 @@ void processMessages()
       {
         switch(lastMessage)
         {
-          case STOP_REVERSING: displayMessageState("EndRevrs"); messageState = READY_TO_RECEIVE; break;
+          case STOP_REVERSING: displayMessageState("EndRevrs"); state = TURN_AROUND; nextState = FOLLOW_LINE; messageState = READY_TO_RECEIVE; break;
           default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
         }
       }; break;
 
-
-///CORNERING
-      case AWAITING_CORNER_INFO:
+      case AWAITING_ADDITIONAL_INFO:
       {
         switch(lastMessage)
         {
-          case LEFT_TURN: displayMessageState("Left"); messageState = TURNING_LEFT; break;
-          case RIGHT_TURN: displayMessageState("Right"); messageState = TURNING_RIGHT; break;
-          default: break;
-        }
-      }; break;
-
-      case TURNING_LEFT:
-      case TURNING_RIGHT:
-      {
-        switch(lastMessage)
-        {
-          case END_OF_CORNER: displayMessageState("EndCornr"); messageState = READY_TO_RECEIVE; break;
-          default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
-        }
-      }; break;
-
-
-///OBSTACLE-SPECIFIC DYNAMIC CONFIGURATION
-      case AWAITING_OBSTACLE_INFO:
-      {
-        switch(lastMessage)
-        {
-          case ZIP_WIRE: displayMessageState("ZipWire"); messageState = ON_ZIP_WIRE; break;
-          default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
-        }
-      }; break;
-
-      case ON_ZIP_WIRE:
-      {
-        switch(lastMessage)
-        {
-          case END_OF_OBSTACLE: displayMessageState("EndObstl"); messageState = READY_TO_RECEIVE; break;
+          case ZIP_WIRE: displayMessageState("ZipWire"); messageState = READY_TO_RECEIVE; break;
           default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
         }
       }; break;
@@ -521,47 +473,51 @@ void followLine() {
 
   checkForSignal();
 
-  // PID line follower
-  // The "proportional" term should be 0 when we are on the line.
-  int proportional = (int)position - 2000;
-
-  // Compute the derivative (change) and integral (sum) of the
-  // position.
-  int derivative = proportional - lastProportional;
-  integral += proportional;
-
-  // Remember the last position.
-  lastProportional = proportional;
-
-  // Compute the difference between the two motor power settings,
-  // m1 - m2.  If this is a positive number the robot will turn
-  // to the right.  If it is a negative number, the robot will
-  // turn to the left, and the magnitude of the number determines
-  // the sharpness of the turn.  You can adjust the constants by which
-  // the proportional, integral, and derivative terms are multiplied to
-  // improve performance.
-  int power_difference = proportional/20 + integral/10000 + derivative*3/2;
-
-  // Compute the actual motor settings.  We never set either motor
-  // to a negative value.
-  const int maximum = targetSpeed;
+  //If we're on a signal section, just drive straight
+  if (!onSignal)
+  {
+    // PID line follower
+    // The "proportional" term should be 0 when we are on the line.
+    int proportional = (int)position - 2000;
   
-  if (power_difference > maximum)
-    power_difference = maximum;
-  if (power_difference < -maximum)
-    power_difference = -maximum;
-
-  if (position == 0 || position == 4000)
-  {
-    //If we see no line at all, just go straight
-    OrangutanMotors::setSpeeds(maximum, maximum);
-  }
-  else
-  {
-    if (power_difference < 0)
-      OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
+    // Compute the derivative (change) and integral (sum) of the
+    // position.
+    int derivative = proportional - lastProportional;
+    integral += proportional;
+  
+    // Remember the last position.
+    lastProportional = proportional;
+  
+    // Compute the difference between the two motor power settings,
+    // m1 - m2.  If this is a positive number the robot will turn
+    // to the right.  If it is a negative number, the robot will
+    // turn to the left, and the magnitude of the number determines
+    // the sharpness of the turn.  You can adjust the constants by which
+    // the proportional, integral, and derivative terms are multiplied to
+    // improve performance.
+    int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
+  
+    // Compute the actual motor settings.  We never set either motor
+    // to a negative value.
+    const int maximum = targetSpeed;
+    
+    if (power_difference > maximum)
+      power_difference = maximum;
+    if (power_difference < -maximum)
+      power_difference = -maximum;
+  
+    if (position == 0 || position == 4000)
+    {
+      //If we see no line at all, just go straight
+      OrangutanMotors::setSpeeds(maximum, maximum);
+    }
     else
-      OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
+    {
+      if (power_difference < 0)
+        OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
+      else
+        OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
+    }
   }
 }
 
@@ -612,17 +568,35 @@ void goOffRoad()
 
   state = RETURN_TO_WORK;
 }
-/*
-void reverseDownRamp() {
+
+void turnAround()
+{
+  displayState("Turning");
+
+  stopGently();
+
+  OrangutanMotors::setSpeeds(SPIN_SPEED, -SPIN_SPEED);
+  delay(TIME_TO_TURN_AROUND);
+
+  OrangutanMotors::setSpeeds(0, 0);
+
+  targetSpeed = NORMAL_MAX_SPEED;
+  state = nextState;
+}
+
+void followLineInReverse()
+{
   displayState("Reverse");
 
-  for (counter = 0; counter < 30; counter++) {
-    OrangutanMotors::setSpeeds(40, -40);
-    counter++;
-  }
-  OrangutanMotors::setSpeeds(40, -40);
+  targetSpeed = -REVERSING_MAX_SPEED;
   
-}*/
+  //Test code to end of function
+  //TODO: Reverse at normal speed, following the line
+  OrangutanMotors::setSpeeds(targetSpeed, targetSpeed);
+  delay(1000);
+  nextState = FOLLOW_LINE;
+  state = TURN_AROUND;
+}
 
 void returnToWork()
 {
@@ -641,67 +615,11 @@ void finish()
 //Function used to quickly test functionality
 void test()
 {
-  displayState("Test");
-  
-  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+  OrangutanMotors::setSpeeds(100, 100);
+  delay (1000);
 
-  if (readingIndicatesSignal())
-  {
-    addToSensorReadingHistory(1);
-  }
-  else
-  {
-    addToSensorReadingHistory(0);
-  }
-
-  checkForSignal();
-
-  if (!onSignal)
-  {
-  // PID line follower
-  // The "proportional" term should be 0 when we are on the line.
-  int proportional = (int)position - 2000;
-
-  // Compute the derivative (change) and integral (sum) of the
-  // position.
-  int derivative = proportional - lastProportional;
-  integral += proportional;
-
-  // Remember the last position.
-  lastProportional = proportional;
-
-  // Compute the difference between the two motor power settings,
-  // m1 - m2.  If this is a positive number the robot will turn
-  // to the right.  If it is a negative number, the robot will
-  // turn to the left, and the magnitude of the number determines
-  // the sharpness of the turn.  You can adjust the constants by which
-  // the proportional, integral, and derivative terms are multiplied to
-  // improve performance.
-  int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
-
-  // Compute the actual motor settings.  We never set either motor
-  // to a negative value.
-  const int maximum = targetSpeed;
-  
-  if (power_difference > maximum)
-    power_difference = maximum;
-  if (power_difference < -maximum)
-    power_difference = -maximum;
-
-  if (position == 0 || position == 4000)
-  {
-    //If we see no line at all, just go straight
-    OrangutanMotors::setSpeeds(maximum, maximum);
-  }
-  else
-  {
-    if (power_difference < 0)
-      OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
-    else
-      OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
-  }
-
-  }
+  state = TURN_AROUND;
+  nextState = REVERSE;
 }
 
 
@@ -904,4 +822,27 @@ boolean stateHasChanged()
   }
 
   return false;
+}
+
+void stopGently()
+{
+  int DECELERATION_RATE = 5;
+  int directionVector = 1; //forwards
+
+  //If we are travelling backwards, use negative speed values
+  if (targetSpeed < 0)
+  {
+    targetSpeed = -targetSpeed;
+    directionVector = -1; //backwards
+  }
+  
+  //Make sure that we will reach a complete stop by ensuring targetSpeed divides exactly by DECELERATION_RATE
+  targetSpeed -= (targetSpeed % DECELERATION_RATE);
+  
+  //Slow down gradually to a stop
+  for (int newSpeed = targetSpeed; newSpeed >= 0; newSpeed -= DECELERATION_RATE)
+  {
+    OrangutanMotors::setSpeeds(newSpeed * directionVector, newSpeed * directionVector);
+    delay(50);
+  }
 }
