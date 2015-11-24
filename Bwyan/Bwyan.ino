@@ -32,20 +32,20 @@ const unsigned int NUM_SENSORS = 5;
 unsigned int sensors[NUM_SENSORS];
 
 //PID (Proportional, Integral, Differential) control parameters
-unsigned int lastProportional = 0;
+int lastProportional = 0;
 long integral = 0;
 
-const unsigned int TURBO_MAX_SPEED = 200;
-const unsigned int FAST_MAX_SPEED = 200;
-const unsigned int NORMAL_MAX_SPEED = 100;
-const unsigned int SLOW_MAX_SPEED = 50;
-const unsigned int CAREFUL_MAX_SPEED = 30;
-const unsigned int REVERSING_MAX_SPEED = 50;
-const unsigned int STOP = 0;
-unsigned int targetSpeed = FAST_MAX_SPEED;
+const int TURBO_MAX_SPEED = 200;
+const int FAST_MAX_SPEED = 200;
+const int NORMAL_MAX_SPEED = 100;
+const int SLOW_MAX_SPEED = 50;
+const int CAREFUL_MAX_SPEED = 30;
+const int REVERSING_MAX_SPEED = 50;
+const int STOP = 0;
+int targetSpeed = FAST_MAX_SPEED;
 
 //Spinning on the spot
-const unsigned int SPIN_SPEED = 40;
+const int SPIN_SPEED = 40;
 const unsigned long TIME_TO_TURN_AROUND = 800; //ms
 
 //To enable accurate verification of whether the sensors are over signal or black,
@@ -66,8 +66,10 @@ boolean onSignal = false;
 
 //Maximum 'distance' between two signals such that they are counted as part of the same message
 //This 'distance' is in undefined units, but we want it to remain constant, regardless of speed
-//A value of 30 is calculated on the basis that we wish the max time between signals to be 300ms at "100" (normal) speed
-//time = distance / speed   [250ms = MAX_MESSAGE_DISTANCE / 100]
+//It is calculated on the basis that we wish the max time between signals to be 250ms at "100" (normal) speed
+//  time = distance / speed   [250ms = MAX_MESSAGE_DISTANCE / 100]
+//Re-arranging the equation:
+//  distance = time * speed   [MAX_MESSAGE_DISTANCE = 250 * 100]
 const unsigned int MAX_MESSAGE_DISTANCE = 25000;
 unsigned long messageWindowExpiryTime;
 
@@ -102,9 +104,6 @@ enum MessageState {
                     AWAITING_ADDITIONAL_INFO
                   };
 
-const unsigned int MSG_SLOW = 2;
-const unsigned int MSG_TURBO = 3;
-const unsigned int MSG_RETURN_TO_WORK = 5;
 boolean messageIsBeingReceived = false;
 unsigned int message = 0; //the message currently being received
 unsigned int lastMessage = 0; //the last complete message received
@@ -125,10 +124,8 @@ enum State  {
               SHUTDOWN
             };
               
-/*State state = TEST;
-State previousState = TEST;*/
-State state = REVERSE;
-State previousState = REVERSE;
+State state = TEST;
+State previousState = TEST;
 State nextState;
 
 //Time-based state transition control (milliseconds)
@@ -590,67 +587,148 @@ void followLineInReverse()
 {
   displayState("Reverse");
 
+  targetSpeed = 100;
+
+  // Get the position of the line.  Note that we *must* provide
+  // the "sensors" argument to read_line() here, even though we
+  // are not interested in the individual sensor readings.
   unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
 
-  if (readingIndicatesSignal())
+  if (isWhite(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
   {
-    addToSensorReadingHistory(1);
   }
-  else
+  else if (isBlack(sensors[1]))
   {
-    addToSensorReadingHistory(0);
+    OrangutanLCD::clear();
+    OrangutanLCD::print("   <   ");
+
+    OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
+    delay(20);
   }
-
-  checkForSignal();
-
-  // PID line follower
-  // The "proportional" term should be 0 when we are on the line.
-  int proportional = (int)position - 2000;
-
-  // Compute the derivative (change) and integral (sum) of the
-  // position.
-  int derivative = proportional - lastProportional;
-  integral += proportional;
-
-  // Remember the last position.
-  lastProportional = proportional;
-
-  // Compute the difference between the two motor power settings,
-  // m1 - m2.  If this is a positive number the robot will turn
-  // to the right.  If it is a negative number, the robot will
-  // turn to the left, and the magnitude of the number determines
-  // the sharpness of the turn.  You can adjust the constants by which
-  // the proportional, integral, and derivative terms are multiplied to
-  // improve performance.
-  int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
-
-  const int maximum = REVERSING_MAX_SPEED;
-
-  if (power_difference > maximum)
-    power_difference = maximum;
-  if (power_difference < -maximum)  
-    power_difference = -maximum;
-
-  if (position == 0 || position == 4000)
+  else if (isBlack(sensors[3]))
   {
-    //If we see no line at all, just go straight
-    OrangutanMotors::setSpeeds(-maximum, -maximum);
+    OrangutanLCD::clear();
+    OrangutanLCD::print("   >   ");
+
+    OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
+    delay(20);
   }
-  else
+  else if (isBlack(sensors[0]))
   {
-    if (power_difference < 0)
-      OrangutanMotors::setSpeeds(-(maximum - power_difference), -maximum);
+    OrangutanLCD::clear();
+    OrangutanLCD::print("  < <  ");
+
+    OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
+    delay(30);
+  }
+  else if (isBlack(sensors[4]))
+  {
+    OrangutanLCD::clear();
+    OrangutanLCD::print("  > >  ");
+
+    OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
+    delay(30);
+  }
+  else if (isWhite(sensors[0]) && isWhite(sensors[1]) && isWhite(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
+  {
+    if (position == 4000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" > > > ");
+
+      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
+      delay(40);
+    }
     else
-      OrangutanMotors::setSpeeds(-maximum, -(maximum + power_difference));
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" < < < ");
+
+      OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
+      delay(40);
+    }
   }
 
-  //Test code to end of function
-  //TODO: Reverse at normal speed, following the line
-  //OrangutanMotors::setSpeeds(-maximum, -maximum);
-  delay(1000);
-  nextState = FOLLOW_LINE;
-  state = TURN_AROUND;
+  OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
+  delay(30);
 }
+
+//
+//
+//
+//
+//
+//
+//
+//
+//  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+//
+////  if (readingIndicatesSignal())
+////  {
+////    addToSensorReadingHistory(1);
+////  }
+////  else
+////  {
+////    addToSensorReadingHistory(0);
+////  }
+////
+////  checkForSignal();
+////
+//  //If we're on a signal section, just drive straight
+////  if (!onSignal)
+////  {
+//    // PID line follower
+//    // The "proportional" term should be 0 when we are on the line.
+//    int proportional = (int)position - 2000;
+//
+//    OrangutanLCD::clear();
+//
+//    if (proportional < 0)
+//      OrangutanLCD::print("<");
+//    else
+//      OrangutanLCD::print(">");
+// 
+//  
+//    // Compute the derivative (change) and integral (sum) of the
+//    // position.
+//    int derivative = proportional - lastProportional;
+//    integral += proportional;
+//  
+//    // Remember the last position.
+//    lastProportional = proportional;
+//  
+//    // Compute the difference between the two motor power settings,
+//    // m1 - m2.  If this is a positive number the robot will turn
+//    // to the right.  If it is a negative number, the robot will
+//    // turn to the left, and the magnitude of the number determines
+//    // the sharpness of the turn.  You can adjust the constants by which
+//    // the proportional, integral, and derivative terms are multiplied to
+//    // improve performance.
+//    int power_difference = proportional; // + integral/10000 + derivative*3/2;
+//  
+//    // Compute the actual motor settings.  We never set either motor
+//    // to a negative value.
+//    const int maximum = targetSpeed;
+//    
+//    if (power_difference > maximum)
+//      power_difference = maximum;
+//    if (power_difference < -maximum)
+//      power_difference = -maximum;
+//  
+//    if (position == 0 || position == 4000)
+//    {
+//      //If we see no line at all, just go straight
+//      OrangutanMotors::setSpeeds(-maximum, -maximum);
+//    }
+//    else
+//    {
+//      if (power_difference < 0)
+//        OrangutanMotors::setSpeeds(-maximum, -maximum - power_difference);
+//      else
+//        OrangutanMotors::setSpeeds(-maximum + power_difference, -maximum);
+//    }
+////  }
+//}
 
 void returnToWork()
 {
@@ -669,11 +747,13 @@ void finish()
 //Function used to quickly test functionality
 void test()
 {
-  OrangutanMotors::setSpeeds(100, 100);
-  delay (1000);
+  state = REVERSE;
 
-  state = TURN_AROUND;
-  nextState = REVERSE;
+//  OrangutanMotors::setSpeeds(100, 100);
+//  delay (1000);
+//
+//  state = TURN_AROUND;
+//  nextState = REVERSE;
 }
 
 
