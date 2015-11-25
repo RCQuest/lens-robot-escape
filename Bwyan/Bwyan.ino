@@ -594,89 +594,75 @@ void followLineInReverse()
   // are not interested in the individual sensor readings.
   unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
 
-  if (isWhite(sensors[0]) && isWhite(sensors[1]) && isBlack(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
-  {
-  }
-  else if (isBlack(sensors[1]))
-  {
-    OrangutanLCD::clear();
-    OrangutanLCD::print("   <   ");
+  int proportional = (int)position - 2000;
 
-    OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
-    delay(20);
-  }
-  else if (isBlack(sensors[3]))
+  if (readingIndicatesSignal())
   {
-    OrangutanLCD::clear();
-    OrangutanLCD::print("   >   ");
+    addToSensorReadingHistory(1);
+  }
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
 
-    OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
-    delay(20);
-  }
-  else if (isBlack(sensors[0]))
-  {
-    OrangutanLCD::clear();
-    OrangutanLCD::print("  < <  ");
+  checkForSignal();
 
-    OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
-    delay(30);
-  }
-  else if (isBlack(sensors[4]))
+  //If we're on a signal section, just drive straight
+  if (!onSignal)
   {
-    OrangutanLCD::clear();
-    OrangutanLCD::print("  > >  ");
-
-    OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
-    delay(30);
-  }
-  else if (isWhite(sensors[0]) && isWhite(sensors[1]) && isWhite(sensors[2]) && isWhite(sensors[3]) && isWhite(sensors[4]))
-  {
-    if (position == 4000)
+    if (proportional == -2000)
     {
-      OrangutanLCD::clear();
-      OrangutanLCD::print(" > > > ");
-
-      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
-      delay(40);
+        OrangutanLCD::clear();
+        OrangutanLCD::print(" < < < ");
+  
+        OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
+        delay(targetSpeed / 2.5);
     }
-    else
+    else if (proportional < -1000)
     {
-      OrangutanLCD::clear();
-      OrangutanLCD::print(" < < < ");
-
-      OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
-      delay(40);
+        OrangutanLCD::clear();
+        OrangutanLCD::print("  < <  ");
+  
+        OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
+        delay(targetSpeed / 3);
+    }
+    else if (proportional < 0)
+    {
+        OrangutanLCD::clear();
+        OrangutanLCD::print("   <   ");
+  
+        OrangutanMotors::setSpeeds(-(targetSpeed * 0.95), -targetSpeed);
+        delay(targetSpeed / 5);
+    }
+    else if (proportional < 1000)
+    {
+        OrangutanLCD::clear();
+        OrangutanLCD::print("   >   ");
+  
+        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.95));
+        delay(targetSpeed / 5);
+    }
+    else if (proportional < 2000)
+    {
+        OrangutanLCD::clear();
+        OrangutanLCD::print("  > >  ");
+  
+        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
+        delay(targetSpeed / 3);
+    }
+    else //(proportional == 2000)
+    {
+        OrangutanLCD::clear();
+        OrangutanLCD::print(" > > > ");
+  
+        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
+        delay(targetSpeed / 2.5);
     }
   }
-
   OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
-  delay(30);
+  delay(targetSpeed / 3);
 }
 
-//
-//
-//
-//
-//
-//
-//
-//
-//  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
-//
-////  if (readingIndicatesSignal())
-////  {
-////    addToSensorReadingHistory(1);
-////  }
-////  else
-////  {
-////    addToSensorReadingHistory(0);
-////  }
-////
-////  checkForSignal();
-////
-//  //If we're on a signal section, just drive straight
-////  if (!onSignal)
-////  {
 //    // PID line follower
 //    // The "proportional" term should be 0 when we are on the line.
 //    int proportional = (int)position - 2000;
@@ -727,7 +713,6 @@ void followLineInReverse()
 //      else
 //        OrangutanMotors::setSpeeds(-maximum + power_difference, -maximum);
 //    }
-////  }
 //}
 
 void returnToWork()
