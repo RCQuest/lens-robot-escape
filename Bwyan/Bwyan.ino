@@ -587,14 +587,21 @@ void followLineInReverse()
 {
   displayState("Reverse");
 
-  targetSpeed = 100;
+  targetSpeed = 50;
 
   // Get the position of the line.  Note that we *must* provide
   // the "sensors" argument to read_line() here, even though we
   // are not interested in the individual sensor readings.
-  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+  int position = robot.readLine(sensors, IR_EMITTERS_ON);
 
-  int proportional = (int)position - 2000;
+  int proportional = position - 2000;
+  int derivative = proportional - lastProportional;
+  integral += proportional;
+  
+  // Remember the last position.
+  lastProportional = proportional;
+
+  float powerReduction = 1 - ((float)(abs(proportional)) / 30000) + ((float)derivative / 500);
 
   if (readingIndicatesSignal())
   {
@@ -610,57 +617,76 @@ void followLineInReverse()
   //If we're on a signal section, just drive straight
   if (!onSignal)
   {
-    if (proportional == -2000)
+    if (proportional < 0)
     {
         OrangutanLCD::clear();
         OrangutanLCD::print(" < < < ");
-  
-        OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
-        delay(targetSpeed / 2.5);
+
+        OrangutanMotors::setSpeeds(-(targetSpeed * powerReduction), -targetSpeed);
+//        delay(targetSpeed / 5);
     }
-    else if (proportional < -1000)
-    {
-        OrangutanLCD::clear();
-        OrangutanLCD::print("  < <  ");
-  
-        OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
-        delay(targetSpeed / 3);
-    }
-    else if (proportional < 0)
-    {
-        OrangutanLCD::clear();
-        OrangutanLCD::print("   <   ");
-  
-        OrangutanMotors::setSpeeds(-(targetSpeed * 0.95), -targetSpeed);
-        delay(targetSpeed / 5);
-    }
-    else if (proportional < 1000)
-    {
-        OrangutanLCD::clear();
-        OrangutanLCD::print("   >   ");
-  
-        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.95));
-        delay(targetSpeed / 5);
-    }
-    else if (proportional < 2000)
-    {
-        OrangutanLCD::clear();
-        OrangutanLCD::print("  > >  ");
-  
-        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
-        delay(targetSpeed / 3);
-    }
-    else //(proportional == 2000)
+    else // (proportional >= 0)
     {
         OrangutanLCD::clear();
         OrangutanLCD::print(" > > > ");
   
-        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
-        delay(targetSpeed / 2.5);
+        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * powerReduction));
+//        delay(targetSpeed / 5);
     }
+    
+//    
+//    if (proportional == -2000)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print(" < < < ");
+//  
+//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
+//        delay(targetSpeed / 2.5);
+//    }
+//    else if (proportional < -1000)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print("  < <  ");
+//  
+//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
+//        delay(targetSpeed / 3);
+//    }
+//    else if (proportional < 0)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print("   <   ");
+//  
+//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.95), -targetSpeed);
+//        delay(targetSpeed / 5);
+//    }
+//    else if (proportional < 1000)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print("   >   ");
+//  
+//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.95));
+//        delay(targetSpeed / 5);
+//    }
+//    else if (proportional < 2000)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print("  > >  ");
+//  
+//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
+//        delay(targetSpeed / 3);
+//    }
+//    else //(proportional == 2000)
+//    {
+//        OrangutanLCD::clear();
+//        OrangutanLCD::print(" > > > ");
+//  
+//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
+//        delay(targetSpeed / 2.5);
+//    }
   }
-  OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
-  delay(targetSpeed / 3);
+  
+//  OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
+//  delay(targetSpeed / 3);
 }
 
 //    // PID line follower
