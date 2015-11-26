@@ -47,6 +47,7 @@ int targetSpeed = FAST_MAX_SPEED;
 
 //Spinning on the spot
 const int SPIN_SPEED = 40;
+const int FAST_SPIN_SPEED = 60;
 const unsigned long TIME_TO_TURN_AROUND = 800; //ms
 
 //To enable accurate verification of whether the sensors are over signal or black,
@@ -134,7 +135,10 @@ State nextState;
 const unsigned long NEVER = 0;
 const unsigned long MORNING_DURATION = 5000;
 const unsigned long BORED_DURATION = 3000;
-const unsigned long CHECK_FOR_BOSS_PAUSE = 1000;
+const unsigned long CHECK_FOR_BOSS_PAUSE1 = 1000;
+const unsigned long CHECK_FOR_BOSS_PAUSE2 = 500;
+const unsigned long CHECK_FOR_BOSS_PAUSE3 = 1000;
+const unsigned long GO_OFF_ROAD_PAUSE = 300;
 unsigned long nextTransitionTime = NEVER;
 
 // Introductory messages.  The "PROGMEM" identifier causes the data to
@@ -503,6 +507,11 @@ void followLineSimpleMode() {
       OrangutanMotors::setSpeeds(targetSpeed, 0);
     }
   }
+  else
+  {
+    //If we're on a signal section, just drive straight
+    OrangutanMotors::setSpeeds(targetSpeed, targetSpeed);
+  }
 }
 
 void getBored()
@@ -517,8 +526,7 @@ void getBored()
 void checkForTheBoss() {
   displayState("ChkBoss");
 
-  OrangutanMotors::setSpeeds(0, 0);
-  delay(1000);
+  stopAndWait(CHECK_FOR_BOSS_PAUSE1);
 
   for (unsigned int counter = 0; counter < 80; counter++)
   {
@@ -536,14 +544,11 @@ void checkForTheBoss() {
     //Dramatic pauses at each extremity (taking a close look)
     if (counter == 20 || counter == 60)
     {
-      OrangutanMotors::setSpeeds(0, 0);
-      delay(500);
+      stopAndWait(CHECK_FOR_BOSS_PAUSE2);  //dramatic pause
     }
   } 
 
-  OrangutanMotors::setSpeeds(0, 0);
-
-  delay (CHECK_FOR_BOSS_PAUSE);  //dramatic pause
+  stopAndWait(CHECK_FOR_BOSS_PAUSE3);  //dramatic pause
 
   state = GO_OFF_ROAD;
 }
@@ -553,10 +558,10 @@ void goOffRoad()
 {
   displayState("GoOffRd");
 
-  OrangutanMotors::setSpeeds(30, -30);
-  delay(300);
-  OrangutanMotors::setSpeeds(0, 0);
-  delay(300);
+  OrangutanMotors::setSpeeds(FAST_SPIN_SPEED, -FAST_SPIN_SPEED);
+  delay(150);
+
+  stopAndWait(GO_OFF_ROAD_PAUSE);
 
   OrangutanMotors::setSpeeds(TURBO_MAX_SPEED, TURBO_MAX_SPEED);
   delay(300);
@@ -607,7 +612,7 @@ void followLine() {
     // the sharpness of the turn.  You can adjust the constants by which
     // the proportional, integral, and derivative terms are multiplied to
     // improve performance.
-    int powerDifference = proportional/7 + derivative * 4; // + integral/10000 
+    int powerDifference = proportional / 7 + derivative * 4; // + integral/10000 
   
     // Compute the actual motor settings.  We never set either motor
     // to a negative value.
@@ -630,6 +635,11 @@ void followLine() {
       else
         OrangutanMotors::setSpeeds(maximum, maximum - powerDifference);
     }
+  }
+  else
+  {
+    //If we're on a signal section, just drive straight
+    OrangutanMotors::setSpeeds(targetSpeed, targetSpeed);
   }
 }
 
@@ -802,7 +812,7 @@ void finish()
 //Function used to quickly test functionality
 void test()
 {
-  state = START_WORK;
+  state = FOLLOW_LINE;
 }
 
 
@@ -825,6 +835,12 @@ unsigned int sum(unsigned int values[], int numOfValues)
   }
 
   return sum;
+}
+
+void stopAndWait(unsigned long waitTime)
+{
+  OrangutanMotors::setSpeeds(0, 0);
+  delay(waitTime);
 }
 
 //Return true if the sensor is above a "white" section of track
