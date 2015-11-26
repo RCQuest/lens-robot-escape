@@ -40,6 +40,7 @@ const int FAST_MAX_SPEED = 200;
 const int NORMAL_MAX_SPEED = 100;
 const int SLOW_MAX_SPEED = 50;
 const int CAREFUL_MAX_SPEED = 30;
+const int FURTIVE_MAX_SPEED = 20;
 const int REVERSING_MAX_SPEED = 50;
 const int STOP = 0;
 int targetSpeed = FAST_MAX_SPEED;
@@ -113,7 +114,8 @@ MessageState messageState = READY_TO_RECEIVE;
 //Set state and previousState to "TEST" for rapid development using the test() function
 enum State  {
               TEST,
-              START_WORK, 
+              START_WORK,
+              FOLLOW_LINE_SIMPLE, 
               FOLLOW_LINE, 
               GET_BORED, 
               CHECK_FOR_THE_BOSS, 
@@ -130,7 +132,7 @@ State nextState;
 
 //Time-based state transition control (milliseconds)
 const unsigned long NEVER = 0;
-const unsigned long MORNING_DURATION = 6000;
+const unsigned long MORNING_DURATION = 5000;
 const unsigned long BORED_DURATION = 3000;
 const unsigned long CHECK_FOR_BOSS_PAUSE = 1000;
 unsigned long nextTransitionTime = NEVER;
@@ -368,6 +370,7 @@ void loop()
   {
     case TEST: test(); break;
     case START_WORK: startWork(); break;
+    case FOLLOW_LINE_SIMPLE: followLineSimpleMode(); break;
     case FOLLOW_LINE: followLine(); break;
     case GET_BORED: getBored(); break;
     case CHECK_FOR_THE_BOSS: checkForTheBoss(); break;
@@ -448,14 +451,124 @@ void processMessages()
 void startWork()
 {
   displayState("StartWrk");
-  
-  state = FOLLOW_LINE;
+
+  targetSpeed = SLOW_MAX_SPEED;
+  state = FOLLOW_LINE_SIMPLE;
   nextState = GET_BORED;
   transitionAfter(MORNING_DURATION);
 }
 
+
 //Tracks a black line on a light background and monitors for
 //signals (which trigger state changes)
+//Simple mode (gives impression of immaturity of line-following mechanism)
+void followLineSimpleMode() {
+  displayState("SimpleLn");
+  
+  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+  if (readingIndicatesSignal())
+  {
+    addToSensorReadingHistory(1);
+  }
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
+
+  checkForSignal();
+
+  //If we're on a signal section, just drive straight
+  if (!onSignal)
+  {
+    if (position < 1000)
+    {
+      // We are far to the right of the line: turn left.
+  
+      // Set the right motor to 100 and the left motor to zero,
+      // to do a sharp turn to the left.  Note that the maximum
+      // value of either motor speed is 255, so we are driving
+      // it at just about 40% of the max.
+      OrangutanMotors::setSpeeds(0, targetSpeed);
+    }
+    else if (position < 3000)
+    {
+      // We are somewhat close to being centered on the line:
+      // drive straight.
+      OrangutanMotors::setSpeeds(targetSpeed, targetSpeed);
+    }
+    else
+    {
+      // We are far to the left of the line: turn right.
+      OrangutanMotors::setSpeeds(targetSpeed, 0);
+    }
+  }
+}
+
+void getBored()
+{
+  displayState("GetBored");
+  state = FOLLOW_LINE_SIMPLE;
+  nextState = CHECK_FOR_THE_BOSS;
+  transitionAfter(BORED_DURATION);
+}
+
+//'Looks' left and right, in a furtive fashion
+void checkForTheBoss() {
+  displayState("ChkBoss");
+
+  OrangutanMotors::setSpeeds(0, 0);
+  delay(1000);
+
+  for (unsigned int counter = 0; counter < 80; counter++)
+  {
+    if (counter < 20 || counter >= 60)
+    {
+      OrangutanMotors::setSpeeds(-FURTIVE_MAX_SPEED, FURTIVE_MAX_SPEED);
+    }
+    else
+    {
+      OrangutanMotors::setSpeeds(FURTIVE_MAX_SPEED, -FURTIVE_MAX_SPEED);
+    }
+
+    delay(30); //80 * 30 = 2400ms
+
+    //Dramatic pauses at each extremity (taking a close look)
+    if (counter == 20 || counter == 60)
+    {
+      OrangutanMotors::setSpeeds(0, 0);
+      delay(500);
+    }
+  } 
+
+  OrangutanMotors::setSpeeds(0, 0);
+
+  delay (CHECK_FOR_BOSS_PAUSE);  //dramatic pause
+
+  state = GO_OFF_ROAD;
+}
+
+//Turns then drives at high speed in a straight line (unmarked) until it finds a new line
+void goOffRoad()
+{
+  displayState("GoOffRd");
+
+  OrangutanMotors::setSpeeds(30, -30);
+  delay(300);
+  OrangutanMotors::setSpeeds(0, 0);
+  delay(300);
+
+  OrangutanMotors::setSpeeds(TURBO_MAX_SPEED, TURBO_MAX_SPEED);
+  delay(300);
+
+  //TODO: implement high-speed escape, and everything thereafter
+  targetSpeed = TURBO_MAX_SPEED;
+  state = FOLLOW_LINE;
+}
+
+//Tracks a black line on a light background and monitors for
+//signals (which trigger state changes)
+//Proportional-Derivative Mode (smoother and more accurate)
 void followLine() {
   displayState("FollowLn");
   
@@ -482,7 +595,7 @@ void followLine() {
     // Compute the derivative (change) and integral (sum) of the
     // position.
     int derivative = proportional - lastProportional;
-    integral += proportional;
+//    integral += proportional;
   
     // Remember the last position.
     lastProportional = proportional;
@@ -494,16 +607,16 @@ void followLine() {
     // the sharpness of the turn.  You can adjust the constants by which
     // the proportional, integral, and derivative terms are multiplied to
     // improve performance.
-    int power_difference = proportional/20; // + integral/10000 + derivative*3/2;
+    int powerDifference = proportional/7 + derivative * 4; // + integral/10000 
   
     // Compute the actual motor settings.  We never set either motor
     // to a negative value.
     const int maximum = targetSpeed;
     
-    if (power_difference > maximum)
-      power_difference = maximum;
-    if (power_difference < -maximum)
-      power_difference = -maximum;
+    if (powerDifference > maximum)
+      powerDifference = maximum;
+    if (powerDifference < -maximum)
+      powerDifference = -maximum;
   
     if (position == 0 || position == 4000)
     {
@@ -512,60 +625,12 @@ void followLine() {
     }
     else
     {
-      if (power_difference < 0)
-        OrangutanMotors::setSpeeds(maximum + power_difference, maximum);
+      if (powerDifference < 0)
+        OrangutanMotors::setSpeeds(maximum + powerDifference, maximum);
       else
-        OrangutanMotors::setSpeeds(maximum, maximum - power_difference);
+        OrangutanMotors::setSpeeds(maximum, maximum - powerDifference);
     }
   }
-}
-
-void getBored()
-{
-  displayState("GetBored");
-  state = FOLLOW_LINE;
-  nextState = CHECK_FOR_THE_BOSS;
-  transitionAfter(BORED_DURATION);
-}
-
-//'Looks' left and right, in a furtive fashion
-void checkForTheBoss() {
-  displayState("ChkBoss");
-
-  unsigned int counter;
-  
-  for (counter = 0; counter < 80; counter++) {
-    if (counter < 20 || counter >= 60)
-    {
-      OrangutanMotors::setSpeeds(-20, 20);
-    }
-    else
-    {
-      OrangutanMotors::setSpeeds(20, -20);
-    }
-
-    delay(20); //80 * 20 = 1600ms
-  } 
-  
-  OrangutanMotors::setSpeeds(0, 0);
-
-  delay (CHECK_FOR_BOSS_PAUSE);  //dramatic pause
-
-  state = GO_OFF_ROAD;
-}
-
-//Turns then drives at high speed in a straight line (unmarked) until it finds a new line
-void goOffRoad()
-{
-  displayState("GoOffRd");
-
-  OrangutanMotors::setSpeeds(30, -30);
-
-  //TODO: implement high-speed escape, and everything thereafter
-
-  delay(300);
-
-  state = RETURN_TO_WORK;
 }
 
 void turnAround()
@@ -579,7 +644,15 @@ void turnAround()
 
   OrangutanMotors::setSpeeds(0, 0);
 
-  targetSpeed = NORMAL_MAX_SPEED;
+  if (nextState == REVERSE)
+  {
+    targetSpeed = REVERSING_MAX_SPEED;
+  }
+  else
+  {
+    targetSpeed = NORMAL_MAX_SPEED;
+  }
+  
   state = nextState;
 }
 
@@ -587,21 +660,14 @@ void followLineInReverse()
 {
   displayState("Reverse");
 
-  targetSpeed = 50;
+  //Comment/uncomment the following lines to use different reversing strategies
+  followLineInReverseProportionalDifferential();
+//  followLineInReverseProportional();
+}
 
-  // Get the position of the line.  Note that we *must* provide
-  // the "sensors" argument to read_line() here, even though we
-  // are not interested in the individual sensor readings.
+void followLineInReverseProportionalDifferential()
+{
   int position = robot.readLine(sensors, IR_EMITTERS_ON);
-
-  int proportional = position - 2000;
-  int derivative = proportional - lastProportional;
-  integral += proportional;
-  
-  // Remember the last position.
-  lastProportional = proportional;
-
-  float powerReduction = 1 - ((float)(abs(proportional)) / 30000) + ((float)derivative / 500);
 
   if (readingIndicatesSignal())
   {
@@ -614,132 +680,110 @@ void followLineInReverse()
 
   checkForSignal();
 
-  //If we're on a signal section, just drive straight
   if (!onSignal)
   {
+    int proportional = position - 2000;
+    int derivative = proportional - lastProportional;
+    lastProportional = proportional;
+  
+    float powerReduction = 1 - ((float)(abs(proportional)) / 30000) + ((float)derivative / 500);
+
     if (proportional < 0)
     {
-        OrangutanLCD::clear();
-        OrangutanLCD::print(" < < < ");
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" < < < ");
 
-        OrangutanMotors::setSpeeds(-(targetSpeed * powerReduction), -targetSpeed);
-//        delay(targetSpeed / 5);
+      OrangutanMotors::setSpeeds(-(targetSpeed * powerReduction), -targetSpeed);
     }
     else // (proportional >= 0)
     {
-        OrangutanLCD::clear();
-        OrangutanLCD::print(" > > > ");
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" > > > ");
   
-        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * powerReduction));
-//        delay(targetSpeed / 5);
+      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * powerReduction));
     }
-    
-//    
-//    if (proportional == -2000)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print(" < < < ");
-//  
-//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
-//        delay(targetSpeed / 2.5);
-//    }
-//    else if (proportional < -1000)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print("  < <  ");
-//  
-//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
-//        delay(targetSpeed / 3);
-//    }
-//    else if (proportional < 0)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print("   <   ");
-//  
-//        OrangutanMotors::setSpeeds(-(targetSpeed * 0.95), -targetSpeed);
-//        delay(targetSpeed / 5);
-//    }
-//    else if (proportional < 1000)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print("   >   ");
-//  
-//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.95));
-//        delay(targetSpeed / 5);
-//    }
-//    else if (proportional < 2000)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print("  > >  ");
-//  
-//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
-//        delay(targetSpeed / 3);
-//    }
-//    else //(proportional == 2000)
-//    {
-//        OrangutanLCD::clear();
-//        OrangutanLCD::print(" > > > ");
-//  
-//        OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
-//        delay(targetSpeed / 2.5);
-//    }
   }
-  
-//  OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
-//  delay(targetSpeed / 3);
+  else
+  {
+    //If we're on a signal section, just drive straight
+    OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
+  }
 }
+  
+void followLineInReverseProportional()
+{
+  int position = robot.readLine(sensors, IR_EMITTERS_ON);
 
-//    // PID line follower
-//    // The "proportional" term should be 0 when we are on the line.
-//    int proportional = (int)position - 2000;
-//
-//    OrangutanLCD::clear();
-//
-//    if (proportional < 0)
-//      OrangutanLCD::print("<");
-//    else
-//      OrangutanLCD::print(">");
-// 
-//  
-//    // Compute the derivative (change) and integral (sum) of the
-//    // position.
-//    int derivative = proportional - lastProportional;
-//    integral += proportional;
-//  
-//    // Remember the last position.
-//    lastProportional = proportional;
-//  
-//    // Compute the difference between the two motor power settings,
-//    // m1 - m2.  If this is a positive number the robot will turn
-//    // to the right.  If it is a negative number, the robot will
-//    // turn to the left, and the magnitude of the number determines
-//    // the sharpness of the turn.  You can adjust the constants by which
-//    // the proportional, integral, and derivative terms are multiplied to
-//    // improve performance.
-//    int power_difference = proportional; // + integral/10000 + derivative*3/2;
-//  
-//    // Compute the actual motor settings.  We never set either motor
-//    // to a negative value.
-//    const int maximum = targetSpeed;
-//    
-//    if (power_difference > maximum)
-//      power_difference = maximum;
-//    if (power_difference < -maximum)
-//      power_difference = -maximum;
-//  
-//    if (position == 0 || position == 4000)
-//    {
-//      //If we see no line at all, just go straight
-//      OrangutanMotors::setSpeeds(-maximum, -maximum);
-//    }
-//    else
-//    {
-//      if (power_difference < 0)
-//        OrangutanMotors::setSpeeds(-maximum, -maximum - power_difference);
-//      else
-//        OrangutanMotors::setSpeeds(-maximum + power_difference, -maximum);
-//    }
-//}
+  if (readingIndicatesSignal())
+  {
+    addToSensorReadingHistory(1);
+  }
+  else
+  {
+    addToSensorReadingHistory(0);
+  }
+
+  checkForSignal();
+
+  if (!onSignal)
+  {
+    int proportional = position - 2000;
+
+    if (proportional == -2000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" < < < ");
+  
+      OrangutanMotors::setSpeeds(-(targetSpeed * 0.9), -targetSpeed);
+      delay(targetSpeed / 2.5);
+    }
+    else if (proportional < -1000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print("  < <  ");
+  
+      OrangutanMotors::setSpeeds(-(targetSpeed * 0.8), -targetSpeed);
+      delay(targetSpeed / 3);
+    }
+    else if (proportional < 0)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print("   <   ");
+  
+      OrangutanMotors::setSpeeds(-(targetSpeed * 0.95), -targetSpeed);
+      delay(targetSpeed / 5);
+    }
+    else if (proportional < 1000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print("   >   ");
+  
+      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.95));
+      delay(targetSpeed / 5);
+    }
+    else if (proportional < 2000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print("  > >  ");
+  
+      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.8));
+      delay(targetSpeed / 3);
+    }
+    else //(proportional == 2000)
+    {
+      OrangutanLCD::clear();
+      OrangutanLCD::print(" > > > ");
+  
+      OrangutanMotors::setSpeeds(-targetSpeed, -(targetSpeed * 0.9));
+      delay(targetSpeed / 2.5);
+    }
+  }
+  else
+  {
+    //If we're on a signal section, just drive straight
+    OrangutanMotors::setSpeeds(-targetSpeed, -targetSpeed);
+  }
+}
 
 void returnToWork()
 {
@@ -758,13 +802,7 @@ void finish()
 //Function used to quickly test functionality
 void test()
 {
-  state = REVERSE;
-
-//  OrangutanMotors::setSpeeds(100, 100);
-//  delay (1000);
-//
-//  state = TURN_AROUND;
-//  nextState = REVERSE;
+  state = START_WORK;
 }
 
 
