@@ -35,7 +35,7 @@ unsigned int sensors[NUM_SENSORS];
 int lastProportional = 0;
 long integral = 0;
 
-const int TURBO_MAX_SPEED = 200;
+const int TURBO_MAX_SPEED = 250;
 const int FAST_MAX_SPEED = 200;
 const int NORMAL_MAX_SPEED = 100;
 const int SLOW_MAX_SPEED = 50;
@@ -43,7 +43,7 @@ const int CAREFUL_MAX_SPEED = 30;
 const int FURTIVE_MAX_SPEED = 20;
 const int REVERSING_MAX_SPEED = 50;
 const int STOP = 0;
-int targetSpeed = FAST_MAX_SPEED;
+int targetSpeed = NORMAL_MAX_SPEED;
 
 //Spinning on the spot
 const int SPIN_SPEED = 40;
@@ -78,26 +78,26 @@ unsigned long messageWindowExpiryTime;
 /*
  * Message Code Card
  *   1. Set Speed Normal
- *   2. Reverse (stop, spin around and reverse at normal speed)
+ *   2. Set Speed Careful
+ *   3. Set Speed Slow
+ *   4. Set Speed Fast
+ *   5. Set Speed Turbo
+ *   6. Reverse (stop, spin around and reverse at normal speed)
  *      1. Stop reversing and return to normal speed forwards
- *   3. Set Speed Careful
- *   4. Set Speed Slow
- *   5. Set Speed Fast
- *   6. Set Speed Turbo
  *   7. Special
- *      1. Zip line
+ *      1. End of course (return to work)
  */
 
 enum MessageCode  {
                     SET_SPEED_NORMAL = 1,
-                    SET_SPEED_REVERSE = 2,
+                    SET_SPEED_CAREFUL = 2,
+                    SET_SPEED_SLOW = 3,
+                    SET_SPEED_FAST = 4,
+                    SET_SPEED_TURBO = 5,
+                    SET_SPEED_REVERSE = 6,
                     STOP_REVERSING = 1,
-                    SET_SPEED_CAREFUL = 3,
-                    SET_SPEED_SLOW = 4,
-                    SET_SPEED_FAST = 5,
-                    SET_SPEED_TURBO = 6,
                     SPECIAL = 7,
-                    ZIP_WIRE = 1
+                    END_OF_COURSE = 1
                   };
                 
 enum MessageState { 
@@ -134,11 +134,13 @@ State nextState;
 //Time-based state transition control (milliseconds)
 const unsigned long NEVER = 0;
 const unsigned long MORNING_DURATION = 5000;
-const unsigned long BORED_DURATION = 3000;
+const unsigned long BORED_DURATION = 3900;
 const unsigned long CHECK_FOR_BOSS_PAUSE1 = 1000;
 const unsigned long CHECK_FOR_BOSS_PAUSE2 = 500;
 const unsigned long CHECK_FOR_BOSS_PAUSE3 = 1000;
 const unsigned long GO_OFF_ROAD_PAUSE = 300;
+const unsigned long TRAVEL_TO_OBSTACLE_COURSE_TIME = 300;
+const unsigned long TRAVEL_BACK_TO_WORK_TIME = 200;
 unsigned long nextTransitionTime = NEVER;
 
 // Introductory messages.  The "PROGMEM" identifier causes the data to
@@ -438,7 +440,7 @@ void processMessages()
       {
         switch(lastMessage)
         {
-          case ZIP_WIRE: displayMessageState("ZipWire"); messageState = READY_TO_RECEIVE; break;
+          case END_OF_COURSE: displayMessageState("RtnWork"); state = RETURN_TO_WORK; messageState = READY_TO_RECEIVE; break;
           default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
         }
       }; break;
@@ -457,11 +459,10 @@ void startWork()
   displayState("StartWrk");
 
   targetSpeed = SLOW_MAX_SPEED;
-  state = FOLLOW_LINE_SIMPLE;
+  state = FOLLOW_LINE;
   nextState = GET_BORED;
   transitionAfter(MORNING_DURATION);
 }
-
 
 //Tracks a black line on a light background and monitors for
 //signals (which trigger state changes)
@@ -517,7 +518,7 @@ void followLineSimpleMode() {
 void getBored()
 {
   displayState("GetBored");
-  state = FOLLOW_LINE_SIMPLE;
+  state = FOLLOW_LINE;
   nextState = CHECK_FOR_THE_BOSS;
   transitionAfter(BORED_DURATION);
 }
@@ -563,11 +564,10 @@ void goOffRoad()
 
   stopAndWait(GO_OFF_ROAD_PAUSE);
 
-  OrangutanMotors::setSpeeds(TURBO_MAX_SPEED, TURBO_MAX_SPEED);
-  delay(300);
+  OrangutanMotors::setSpeeds(FAST_MAX_SPEED, FAST_MAX_SPEED);
+  delay(TRAVEL_TO_OBSTACLE_COURSE_TIME);
 
-  //TODO: implement high-speed escape, and everything thereafter
-  targetSpeed = TURBO_MAX_SPEED;
+  targetSpeed = FAST_MAX_SPEED;
   state = FOLLOW_LINE;
 }
 
@@ -799,20 +799,36 @@ void returnToWork()
 {
   displayState("Rtn2Wrk");
 
-  //TODO: go back to boring line-following mode
-  state = SHUTDOWN;
+  //Get off the obstacle course line and just drive straight
+  changeSpeedSmoothly(NORMAL_MAX_SPEED);
+  delay(TRAVEL_BACK_TO_WORK_TIME);
+
+  targetSpeed = SLOW_MAX_SPEED;
+  state = FOLLOW_LINE;
 }
 
 void finish()
 {
-  OrangutanMotors::setSpeeds(0, 0);
+  stopGently();
 }
-
 
 //Function used to quickly test functionality
 void test()
 {
-  state = FOLLOW_LINE;
+//  targetSpeed = 100;
+//
+//  OrangutanMotors::setSpeeds(targetSpeed, targetSpeed);
+//  delay (1000);
+//
+//  changeSpeedSmoothly(SLOW_MAX_SPEED);
+//  delay (1000);
+//
+//  changeSpeedSmoothly(121);
+//  delay (1000);
+
+  state = START_WORK;
+//  nextState = RETURN_TO_WORK;
+//  transitionAfter(2000);
 }
 
 
@@ -1025,23 +1041,36 @@ boolean stateHasChanged()
 
 void stopGently()
 {
-  int DECELERATION_RATE = 5;
-  int directionVector = 1; //forwards
+  changeSpeedSmoothly(STOP);
+}
 
-  //If we are travelling backwards, use negative speed values
-  if (targetSpeed < 0)
+void changeSpeedSmoothly(int newSpeed)
+{
+  //If we're already going at the target speed, we don't need to do anything
+  if (newSpeed != targetSpeed)
   {
-    targetSpeed = -targetSpeed;
-    directionVector = -1; //backwards
-  }
+    const int RATE_OF_CHANGE = 5;
   
-  //Make sure that we will reach a complete stop by ensuring targetSpeed divides exactly by DECELERATION_RATE
-  targetSpeed -= (targetSpeed % DECELERATION_RATE);
+    int currentSpeed = targetSpeed;
+    int speedDifference = abs(newSpeed - currentSpeed);
+    int accelerationMultiplier = (newSpeed < currentSpeed) ? -1 : 1;
   
-  //Slow down gradually to a stop
-  for (int newSpeed = targetSpeed; newSpeed >= 0; newSpeed -= DECELERATION_RATE)
-  {
-    OrangutanMotors::setSpeeds(newSpeed * directionVector, newSpeed * directionVector);
-    delay(50);
+    //Make sure that we will reach a complete stop by ensuring targetSpeed divides exactly by RATE_OF_CHANGE
+    currentSpeed += (speedDifference % RATE_OF_CHANGE) * accelerationMultiplier;
+    
+    //Slow down gradually to a stop
+    do
+    {
+      currentSpeed += (RATE_OF_CHANGE * accelerationMultiplier);
+  
+      OrangutanLCD::clear();
+      OrangutanLCD::print(currentSpeed);
+  
+      OrangutanMotors::setSpeeds(currentSpeed, currentSpeed);
+      delay(50);
+    }
+    while (currentSpeed != newSpeed);
+  
+    targetSpeed = newSpeed;
   }
 }
