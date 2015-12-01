@@ -36,8 +36,10 @@ int lastProportional = 0;
 long integral = 0;
 
 const int TURBO_MAX_SPEED = 250;
-const int FAST_MAX_SPEED = 200;
+const int FAST_MAX_SPEED = 180;
 const int NORMAL_MAX_SPEED = 100;
+const int MAZE_MAX_SPEED = 60;
+const int TIGHTROPE_MAX_SPEED = 60;
 const int SLOW_MAX_SPEED = 50;
 const int CAREFUL_MAX_SPEED = 30;
 const int FURTIVE_MAX_SPEED = 20;
@@ -48,6 +50,7 @@ int targetSpeed = NORMAL_MAX_SPEED;
 //Spinning on the spot
 const int SPIN_SPEED = 40;
 const int FAST_SPIN_SPEED = 60;
+const int MAZE_TURN_SPEED = 80;
 const unsigned long TIME_TO_TURN_AROUND = 800; //ms
 
 //To enable accurate verification of whether the sensors are over signal or black,
@@ -97,7 +100,9 @@ enum MessageCode  {
                     SET_SPEED_REVERSE = 6,
                     STOP_REVERSING = 1,
                     SPECIAL = 7,
-                    END_OF_COURSE = 1
+                    END_OF_COURSE = 1,
+                    MAZE = 2,
+                    TIGHTROPE = 3
                   };
                 
 enum MessageState { 
@@ -120,15 +125,18 @@ enum State  {
               FOLLOW_LINE, 
               GET_BORED, 
               CHECK_FOR_THE_BOSS, 
-              GO_OFF_ROAD, 
+              GO_OFF_ROAD,
+              NAVIGATE_MAZE,
+              CROSS_TIGHTROPE,
+              FOLLOW_WHITE_LINE, 
               TURN_AROUND,
               REVERSE, 
               RETURN_TO_WORK,
               SHUTDOWN
             };
               
-State state = TEST;
-State previousState = TEST;
+State state = FOLLOW_LINE;
+State previousState = FOLLOW_LINE;
 State nextState;
 
 //Time-based state transition control (milliseconds)
@@ -140,8 +148,12 @@ const unsigned long CHECK_FOR_BOSS_PAUSE2 = 500;
 const unsigned long CHECK_FOR_BOSS_PAUSE3 = 1000;
 const unsigned long GO_OFF_ROAD_PAUSE = 300;
 const unsigned long TRAVEL_TO_OBSTACLE_COURSE_TIME = 300;
+const unsigned long CROSS_TIGHTROPE_TIME = 5800;
 const unsigned long TRAVEL_BACK_TO_WORK_TIME = 200;
 unsigned long nextTransitionTime = NEVER;
+
+char path[100] = "RRSLRLLRLRLRLSLLRSSR";
+unsigned char pathLength = 20; // the length of the path
 
 // Introductory messages.  The "PROGMEM" identifier causes the data to
 // go into program space.
@@ -381,6 +393,9 @@ void loop()
     case GET_BORED: getBored(); break;
     case CHECK_FOR_THE_BOSS: checkForTheBoss(); break;
     case GO_OFF_ROAD: goOffRoad(); break;
+    case NAVIGATE_MAZE: navigateSolvedMaze(); break;
+    case CROSS_TIGHTROPE: crossTightrope(); break;
+    case FOLLOW_WHITE_LINE: followWhiteLine(); break;
     case TURN_AROUND: turnAround(); break;
     case REVERSE: followLineInReverse(); break;
     case RETURN_TO_WORK: returnToWork(); break;
@@ -441,6 +456,8 @@ void processMessages()
         switch(lastMessage)
         {
           case END_OF_COURSE: displayMessageState("RtnWork"); state = RETURN_TO_WORK; messageState = READY_TO_RECEIVE; break;
+          case MAZE: displayMessageState("Maze"); state = NAVIGATE_MAZE; messageState = READY_TO_RECEIVE; break;
+          case TIGHTROPE: displayMessageState("TigtRope"); state = CROSS_TIGHTROPE; messageState = READY_TO_RECEIVE; break;
           default: displayMessageState("UNEXPCTD"); state = SHUTDOWN; break;   //Unexpected message - STOP!
         }
       }; break;
@@ -643,6 +660,76 @@ void followLine() {
   }
 }
 
+void navigateSolvedMaze()
+{
+  displayState("NavMaze");
+
+  // Re-run the maze.  It's not necessary to identify the
+  // intersections, so this loop is really simple.
+  for (unsigned int segmentNum = 0; segmentNum < pathLength; segmentNum++)
+  {
+    followSegment();
+
+    // Drive straight while slowing down, as before.
+    OrangutanMotors::setSpeeds(50, 50);
+    delay(50);
+    OrangutanMotors::setSpeeds(40, 40);
+    delay(200);
+
+    // Make a turn according to the instruction stored in
+    // path[i].
+    turn(path[segmentNum]);
+  }
+
+  state = FOLLOW_LINE;
+}
+
+void crossTightrope()
+{
+  displayState("Tightrope");
+  targetSpeed = TIGHTROPE_MAX_SPEED;
+  state = FOLLOW_WHITE_LINE;
+  nextState = FOLLOW_LINE;
+  transitionAfter(CROSS_TIGHTROPE_TIME);
+}
+
+//Tracks a white line on a black background
+//Proportional-Derivative Mode (smoother and more accurate)
+void followWhiteLine() {
+  displayState("WhiteLn");
+  
+  unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+  // PID line follower (white on black)
+  int proportional = (int)(2000 - position);
+  int derivative = proportional - lastProportional;
+  lastProportional = proportional;
+
+  int powerDifference = proportional / 7 + derivative * 4; // + integral/10000 
+
+  // Compute the actual motor settings.  We never set either motor
+  // to a negative value.
+  const int maximum = targetSpeed;
+  
+  if (powerDifference > maximum)
+    powerDifference = maximum;
+  if (powerDifference < -maximum)
+    powerDifference = -maximum;
+
+  if (position == 0 || position == 4000)
+  {
+    //If we see no line at all, just go straight
+    OrangutanMotors::setSpeeds(maximum, maximum);
+  }
+  else
+  {
+    if (powerDifference < 0)
+      OrangutanMotors::setSpeeds(maximum + powerDifference, maximum);
+    else
+      OrangutanMotors::setSpeeds(maximum, maximum - powerDifference);
+  }
+}
+
 void turnAround()
 {
   displayState("Turning");
@@ -826,7 +913,10 @@ void test()
 //  changeSpeedSmoothly(121);
 //  delay (1000);
 
-  state = START_WORK;
+//navigateSolvedMaze();
+
+//  state = CROSS_TIGHTROPE;
+  state = FOLLOW_LINE;
 //  nextState = RETURN_TO_WORK;
 //  transitionAfter(2000);
 }
@@ -1072,5 +1162,78 @@ void changeSpeedSmoothly(int newSpeed)
     while (currentSpeed != newSpeed);
   
     targetSpeed = newSpeed;
+  }
+}
+
+// This function, causes the 3pi to follow a segment of the maze until
+// it detects an intersection, a dead end, or the finish.
+void followSegment()
+{
+  while(1)
+  {
+    unsigned int position = robot.readLine(sensors, IR_EMITTERS_ON);
+
+    int proportional = ((int)position) - 2000;
+    int derivative = proportional - lastProportional;
+    lastProportional = proportional;
+
+    int powerDifference = proportional / 7 + derivative * 4;
+
+    const int maximum = MAZE_MAX_SPEED;
+    
+    if (powerDifference > maximum)
+      powerDifference = maximum;
+    if (powerDifference < -maximum)
+      powerDifference = -maximum;
+
+    if (powerDifference < 0)
+      OrangutanMotors::setSpeeds(maximum + powerDifference, maximum);
+    else
+      OrangutanMotors::setSpeeds(maximum, maximum - powerDifference);
+
+    // We use the inner three sensors (1, 2, and 3) for
+    // determining whether there is a line straight ahead, and the
+    // sensors 0 and 4 for detecting lines going to the left and
+    // right.
+
+    if (sensors[1] < 100 && sensors[2] < 100 && sensors[3] < 100)
+    {
+      // There is no line visible ahead, and we didn't see any
+      // intersection.  Must be a dead end.
+      return;
+    }
+    else if (sensors[0] > 200 || sensors[4] > 200)
+    {
+      // Found an intersection.
+      return;
+    }
+  }
+}
+
+// Code to perform various types of turns according to the parameter dir,
+// which should be 'L' (left), 'R' (right), 'S' (straight), or 'B' (back).
+// The delays here had to be calibrated for the 3pi's motors.
+void turn(unsigned char dir)
+{
+  switch(dir)
+  {
+    case 'L':
+      // Turn left.
+      OrangutanMotors::setSpeeds(-MAZE_TURN_SPEED, MAZE_TURN_SPEED);
+      delay(200);
+      break;
+    case 'R':
+      // Turn right.
+      OrangutanMotors::setSpeeds(MAZE_TURN_SPEED, -MAZE_TURN_SPEED);
+      delay(200);
+      break;
+    case 'B':
+      // Turn around.
+      OrangutanMotors::setSpeeds(MAZE_TURN_SPEED, -MAZE_TURN_SPEED);
+      delay(390);
+      break;
+    case 'S':
+      // Don't do anything!
+      break;
   }
 }
